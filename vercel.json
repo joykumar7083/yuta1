@@ -3,22 +3,10 @@
   "builds": [
     {
       "src": "gen_api.py",
-      "use": "@vercel/python",
-      "config": { "maxLambdaSize": "50mb" }
+      "use": "@vercel/python"
     }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "gen_api.py"
-    }
-  ],
-  "env": {
-    "GEN_API_KEY": "yuta_your_dad",
-    "GEN_DEFAULT_REGION": "BD",
-    "GEN_DEFAULT_THREADS": "3",
-    "GEN_MAX_COUNT": "50",
-    "GEN_MAX_THREADS": "10",
-    "GEN_DO_MAXIM": "1"
-  }
+    { "src": "/(.*)", "dest": "gen_api.py" }
+  ]
 }
