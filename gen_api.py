@@ -1,16 +1,11 @@
 #!/usr/bin/env python3
 """
-ARAFAT GEN — HTTP API server
-Wraps gen.py create_account() into a REST API.
-Deploy to Vercel / VPS / anywhere.
+ARAFAT GEN — HTTP API (Vercel-safe version)
 """
 import os, sys, json, time, threading
 from datetime import datetime
 from flask import Flask, request, jsonify
 
-# ═══════════════════════════════════════════════════════════════════
-#  Import gen.py
-# ═══════════════════════════════════════════════════════════════════
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 
@@ -20,30 +15,20 @@ _spec = importlib.util.spec_from_file_location(
 _gen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_gen)
 
-# Grab handles
 create_account = _gen.create_account
-REGION_LANG    = _gen.REGION_LANG
-generate_nick  = _gen.generate_nick
+REGION_LANG = _gen.REGION_LANG
 
-# ═══════════════════════════════════════════════════════════════════
-#  Config
-# ═══════════════════════════════════════════════════════════════════
-API_KEY                = os.environ.get("GEN_API_KEY", "").strip()
-DEFAULT_THREADS        = int(os.environ.get("GEN_DEFAULT_THREADS", "3"))
-MAX_THREADS            = int(os.environ.get("GEN_MAX_THREADS", "10"))
-MAX_COUNT_PER_REQUEST  = int(os.environ.get("GEN_MAX_COUNT", "50"))
-PORT                   = int(os.environ.get("PORT", os.environ.get("GEN_PORT", "8080")))
-DEFAULT_REGION         = os.environ.get("GEN_DEFAULT_REGION", "BD").upper()
-DEFAULT_NICK_PREFIX    = os.environ.get("GEN_NICK_PREFIX", "EREN")
-DEFAULT_PW_PREFIX      = os.environ.get("GEN_PW_PREFIX", "Eren")
-DO_MAXIM               = os.environ.get("GEN_DO_MAXIM", "1") == "1"
+API_KEY = os.environ.get("GEN_API_KEY", "").strip()
+DEFAULT_REGION = os.environ.get("GEN_DEFAULT_REGION", "BD").upper()
+DEFAULT_NICK = os.environ.get("GEN_NICK_PREFIX", "EREN")
+DEFAULT_PW = os.environ.get("GEN_PW_PREFIX", "Eren")
+DO_MAXIM = os.environ.get("GEN_DO_MAXIM", "0") == "1"   # Vercel-এ OFF default
 
-# ── All supported regions ──
+# ── Time budget: Vercel Hobby = 10s. Pro = 60s. Set conservative. ──
+TIME_BUDGET = float(os.environ.get("GEN_TIME_BUDGET", "8.0"))
+
 SUPPORTED_REGIONS = list(REGION_LANG.keys()) + ["OTHER", "SAC", "EU", "CIS"]
 
-# ═══════════════════════════════════════════════════════════════════
-#  Flask app
-# ═══════════════════════════════════════════════════════════════════
 app = Flask(__name__)
 
 @app.after_request
@@ -53,58 +38,61 @@ def _cors(resp):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key"
     return resp
 
-def _auth_required(fn):
-    def wrap(*a, **k):
-        if request.method == "OPTIONS":
-            return ("", 204)
-        if API_KEY:
-            key = request.headers.get("X-API-Key") or request.args.get("api_key")
-            if key != API_KEY:
-                return jsonify({"ok": False, "error": "unauthorized"}), 401
-        return fn(*a, **k)
-    wrap.__name__ = fn.__name__
-    return wrap
+def _auth_ok():
+    if not API_KEY:
+        return True
+    key = request.headers.get("X-API-Key") or request.args.get("api_key")
+    return key == API_KEY
 
-# ═══════════════════════════════════════════════════════════════════
-#  Worker
-# ═══════════════════════════════════════════════════════════════════
-_result_lock = threading.Lock()
+# ── Background-safe generation store (per-lambda memory) ──
+_gen_lock = threading.Lock()
+_gen_results = {}   # job_id -> {"status":..., "accounts":[...], "started": ts}
 
-def _worker(idx, region, pw_prefix, nick_prefix, results, stop_event):
-    if stop_event.is_set():
-        return
+def _bg_generate(job_id, region, count, threads, nick_prefix, pw_prefix, do_maxim):
     try:
-        res = create_account(
-            pw_prefix=pw_prefix,
-            nick_prefix=nick_prefix,
-            region=region,
-            tid=idx,
-            do_maxim=DO_MAXIM,
-        )
-        if not res:
-            return
-        account = {
-            # app.py expected keys
-            "uid":           res.get("uid"),
-            "pass":          res.get("password"),
-            "password":      res.get("password"),
-            "name":          res.get("name"),
-            # extra keys
-            "nickname":      res.get("nickname"),
-            "account_id":    res.get("account_id"),
-            "region":        res.get("region"),
-            "open_id":       res.get("open_id"),
-            "access_token":  res.get("access_token"),
-            "refresh_token": res.get("refresh_token"),
-            "jwt_token":     res.get("jwt_token"),
-            "status":        res.get("status"),
-            "date_created":  res.get("date_created"),
-            "raw":           res,
-        }
-        with _result_lock:
-            results.append(account)
+        results = []
+        _gen.DO_MAXIM = do_maxim
+        for i in range(max(1, min(threads, count))):
+            if len(results) >= count:
+                break
+            try:
+                r = create_account(
+                    pw_prefix=pw_prefix,
+                    nick_prefix=nick_prefix,
+                    region=region,
+                    tid=i + 1,
+                    do_maxim=do_maxim,
+                )
+                if r:
+                    results.append({
+                        "uid":           r.get("uid"),
+                        "pass":          r.get("password"),
+                        "password":      r.get("password"),
+                        "name":          r.get("name"),
+                        "nickname":      r.get("nickname"),
+                        "account_id":    r.get("account_id"),
+                        "region":        r.get("region"),
+                        "open_id":       r.get("open_id"),
+                        "access_token":  r.get("access_token"),
+                        "jwt_token":     r.get("jwt_token"),
+                        "status":        r.get("status"),
+                        "date_created":  r.get("date_created"),
+                    })
+            except Exception:
+                pass
+        with _gen_lock:
+            _gen_results[job_id] = {
+                "status": "done",
+                "accounts": results,
+                "count": len(results),
+            }
     except Exception as e:
-        sys.stderr.write(f"[worker {idx}] {type(e).__name__}: {e}\n")
+        with _gen_lock:
+            _gen_results[job_id] = {
+                "status": "error",
+                "error": f"{type(e).__name__}: {e}",
+                "accounts": [],
+            }
 
 # ═══════════════════════════════════════════════════════════════════
 #  Routes
@@ -113,11 +101,9 @@ def _worker(idx, region, pw_prefix, nick_prefix, results, stop_event):
 @app.route("/", methods=["GET"])
 def root():
     return jsonify({
-        "ok": True,
-        "service": "arafat-gen-api",
-        "version": "1.0",
+        "ok": True, "service": "arafat-gen-api",
         "regions": SUPPORTED_REGIONS,
-        "endpoints": ["POST /api/gen", "GET /health", "GET /regions"],
+        "endpoints": ["POST /api/gen", "GET /api/gen/status/<job_id>", "GET /health"],
     })
 
 @app.route("/health", methods=["GET"])
@@ -129,100 +115,110 @@ def regions():
     return jsonify({"ok": True, "regions": SUPPORTED_REGIONS})
 
 @app.route("/api/gen", methods=["POST", "OPTIONS"])
-@_auth_required
 def api_gen():
     """
-    POST /api/gen
-    Body (JSON):
-      {
-        "region":       "BD",         # optional, default BD
-        "count":        2,            # 1..MAX_COUNT_PER_REQUEST
-        "threads":      1,            # 1..MAX_THREADS
-        "name_prefix":  "EREN",       # nickname prefix
-        "pw_prefix":    "Eren",       # password prefix
-        "do_maxim":     true          # optional, default true
-      }
-    Response:
-      {
-        "ok": true, "region": "BD", "requested": 2, "generated": 2,
-        "accounts": [ {...}, {...} ],
-        "errors": []
-      }
+    Vercel-safe endpoint. Returns 202 + job_id immediately.
+    Client polls /api/gen/status/<job_id> for results.
     """
+    if request.method == "OPTIONS":
+        return ("", 204)
+    if not _auth_ok():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+
     d = request.get_json(silent=True) or {}
     region = (d.get("region") or DEFAULT_REGION).strip().upper()
     if region not in SUPPORTED_REGIONS:
-        return jsonify({
-            "ok": False, "error": f"unsupported region '{region}'",
-            "supported": SUPPORTED_REGIONS,
-        }), 400
+        return jsonify({"ok": False, "error": f"unsupported region '{region}'"}), 400
 
     try: count = int(d.get("count", 1))
-    except Exception:
-        return jsonify({"ok": False, "error": "count must be int"}), 400
-    try: threads = int(d.get("threads", DEFAULT_THREADS))
-    except Exception:
-        threads = DEFAULT_THREADS
+    except Exception: count = 1
+    count = max(1, min(count, 10))
 
-    name_prefix = (d.get("name_prefix") or DEFAULT_NICK_PREFIX).strip()[:12]
-    pw_prefix   = (d.get("pw_prefix")   or DEFAULT_PW_PREFIX).strip()
+    try: threads = int(d.get("threads", 1))
+    except Exception: threads = 1
+    threads = max(1, min(threads, 3))
+
+    nick_prefix = (d.get("name_prefix") or DEFAULT_NICK).strip()[:12]
+    pw_prefix   = (d.get("pw_prefix")   or DEFAULT_PW).strip()
     do_maxim    = bool(d.get("do_maxim", DO_MAXIM))
 
-    if not 1 <= count <= MAX_COUNT_PER_REQUEST:
-        return jsonify({
-            "ok": False,
-            "error": f"count must be 1..{MAX_COUNT_PER_REQUEST}"
-        }), 400
-    threads = max(1, min(threads, MAX_THREADS, count))
-
-    # Override gen.py module global DO_MAXIM
-    try:
-        _gen.DO_MAXIM = do_maxim
-    except Exception:
-        pass
+    # Try synchronous first — if fast, returns accounts; if slow, returns job_id
+    import uuid
+    job_id = uuid.uuid4().hex[:12]
 
     results = []
-    stop_event = threading.Event()
-    workers = []
+    _gen.DO_MAXIM = do_maxim
+    deadline = time.time() + TIME_BUDGET
+
     for i in range(threads):
-        t = threading.Thread(
-            target=_worker,
-            args=(i + 1, region, pw_prefix, name_prefix, results, stop_event),
-            daemon=True,
-            name=f"gen-{i+1}",
-        )
-        t.start()
-        workers.append(t)
+        if len(results) >= count: break
+        if time.time() > deadline: break
+        try:
+            r = create_account(
+                pw_prefix=pw_prefix, nick_prefix=nick_prefix,
+                region=region, tid=i + 1, do_maxim=do_maxim,
+            )
+            if r:
+                results.append({
+                    "uid":         r.get("uid"),
+                    "pass":        r.get("password"),
+                    "password":    r.get("password"),
+                    "name":        r.get("name"),
+                    "nickname":    r.get("nickname"),
+                    "account_id":  r.get("account_id"),
+                    "region":      r.get("region"),
+                    "open_id":     r.get("open_id"),
+                    "access_token":r.get("access_token"),
+                    "jwt_token":   r.get("jwt_token"),
+                    "status":      r.get("status"),
+                    "date_created":r.get("date_created"),
+                })
+        except Exception:
+            pass
 
-    deadline = time.time() + 300  # 5 min cap
-    while time.time() < deadline:
-        with _result_lock:
-            if len(results) >= count:
-                stop_event.set()
-                break
-        if all(not t.is_alive() for t in workers):
-            break
-        time.sleep(0.5)
+    # If we filled the request within budget — return immediately
+    if len(results) >= count:
+        return jsonify({
+            "ok": True, "region": region,
+            "requested": count, "generated": len(results),
+            "accounts": results, "job_id": job_id, "async": False,
+        })
 
-    with _result_lock:
-        out = results[:count]
+    # Otherwise, kick off background thread and return job_id
+    with _gen_lock:
+        _gen_results[job_id] = {"status": "running", "accounts": results, "count": len(results)}
+
+    t = threading.Thread(
+        target=_bg_generate,
+        args=(job_id, region, count, threads, nick_prefix, pw_prefix, do_maxim),
+        daemon=True,
+    )
+    t.start()
 
     return jsonify({
-        "ok": True,
-        "region": region,
-        "requested": count,
-        "generated": len(out),
-        "accounts": out,
-        "errors": [],
+        "ok": True, "region": region,
+        "requested": count, "generated": len(results),
+        "accounts": results, "job_id": job_id, "async": True,
+        "poll": f"/api/gen/status/{job_id}",
+    }), 202
+
+@app.route("/api/gen/status/<job_id>", methods=["GET"])
+def api_gen_status(job_id):
+    if not _auth_ok():
+        return jsonify({"ok": False, "error": "unauthorized"}), 401
+    with _gen_lock:
+        s = _gen_results.get(job_id)
+    if not s:
+        return jsonify({"ok": False, "error": "job not found"}), 404
+    return jsonify({
+        "ok": True, "job_id": job_id,
+        "status": s.get("status"),
+        "accounts": s.get("accounts", []),
+        "count": s.get("count", 0),
+        "error": s.get("error"),
     })
 
 if __name__ == "__main__":
-    print()
-    print("  🔥 YUTA GEN API")
-    print(f"  · port: {PORT}")
-    print(f"  · key required: {'YES' if API_KEY else 'NO'}")
-    print(f"  · default region: {DEFAULT_REGION}")
-    print(f"  · regions: {', '.join(SUPPORTED_REGIONS)}")
-    print(f"  · max count: {MAX_COUNT_PER_REQUEST}, max threads: {MAX_THREADS}")
-    print()
-    app.run(host="0.0.0.0", port=PORT, debug=False, threaded=True)
+    port = int(os.environ.get("PORT", "8080"))
+    print(f"🔥 ARAFAT GEN API · port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
