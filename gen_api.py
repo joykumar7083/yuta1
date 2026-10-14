@@ -101,7 +101,7 @@ def _bg_generate(job_id, region, count, threads, nick_prefix, pw_prefix, do_maxi
 @app.route("/", methods=["GET"])
 def root():
     return jsonify({
-        "ok": True, "service": "arafat-gen-api",
+        "ok": True, "service": "yuta-gen-api",
         "regions": SUPPORTED_REGIONS,
         "endpoints": ["POST /api/gen", "GET /api/gen/status/<job_id>", "GET /health"],
     })
@@ -220,5 +220,5 @@ def api_gen_status(job_id):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
-    print(f"🔥 ARAFAT GEN API · port {port}")
+    print(f"🔥 YUTA GEN API · port {port}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
