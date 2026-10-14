@@ -270,12 +270,41 @@ def banner():
     draw_line()
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  FOLDERS
+#  FOLDERS  ── VERCEL-SAFE (uses /tmp on read-only filesystems)
 # ═════════════════════════════════════════════════════════════════════════════
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_FOLDER = os.path.join(BASE_DIR, "ARAFAT_GEN")
+_IS_VERCEL = bool(os.environ.get("VERCEL")) or os.environ.get("VERCEL_ENV")
+_IS_LAMBDA = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME")) or \
+             bool(os.environ.get("AWS_EXECUTION_ENV"))
+
+if _IS_VERCEL or _IS_LAMBDA:
+    # Vercel / AWS Lambda: only /tmp is writable
+    BASE_DIR = "/tmp"
+else:
+    try:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        # test writability
+        if not os.access(BASE_DIR, os.W_OK):
+            BASE_DIR = "/tmp"
+    except Exception:
+        BASE_DIR = "/tmp"
+
+BASE_FOLDER  = os.path.join(BASE_DIR, "ARAFAT_GEN")
 SAVED_FOLDER = os.path.join(BASE_FOLDER, "SAVED")
-for d in [BASE_FOLDER, SAVED_FOLDER]: os.makedirs(d, exist_ok=True)
+
+# Safe folder creation — never crash on read-only FS
+try:
+    for d in (BASE_FOLDER, SAVED_FOLDER):
+        os.makedirs(d, exist_ok=True)
+except Exception as _e:
+    # On read-only FS, fall back to /tmp
+    try:
+        BASE_FOLDER  = "/tmp/ARAFAT_GEN"
+        SAVED_FOLDER = "/tmp/ARAFAT_GEN/SAVED"
+        for d in (BASE_FOLDER, SAVED_FOLDER):
+            os.makedirs(d, exist_ok=True)
+    except Exception:
+        # Last resort: disable saving (in-memory only)
+        pass
 
 FILE_LOCKS = {}
 def get_lock(f):
@@ -299,8 +328,13 @@ EXIT = False
 def safe_exit(sig=None, fr=None):
     global EXIT; EXIT = True
     print(f"\n{G_}🔥 Goodbye!{S_}"); sys.exit(0)
-signal.signal(signal.SIGINT, safe_exit)
-signal.signal(signal.SIGTERM, safe_exit)
+
+# Signal handling — skip on Vercel/Lambda (main thread restrictions)
+try:
+    signal.signal(signal.SIGINT, safe_exit)
+    signal.signal(signal.SIGTERM, safe_exit)
+except Exception:
+    pass
 
 def gen_password(prefix):
     return f"{prefix}_{''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))}"
