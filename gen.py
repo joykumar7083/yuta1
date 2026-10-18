@@ -1,4 +1,4 @@
-# gen.py — Y U T A PREMIUM GEN [OB55]
+# gen.py — Y U T A PREMIUM GEN [OB55]  (NO FILE / NO FOLDER MODE)
 # Pipeline: register → grant → MajorRegister → MajorLogin → ChooseRegion
 #           → ChooseNewbieChoice → GetLoginData → GetNewbieGuideDesc
 #           → GiveAccountNewbieRoles → GetAccountFreshStatsInfo
@@ -6,6 +6,9 @@
 #           → SelectPresetLoadout x4 (128→80→96→64) → GetProfiles verify
 # Theme: ⚡ NEON PURPLE + CYAN ⚡
 # Devs: YUTA
+#
+# ⚠ THIS BUILD NEVER CREATES ANY FOLDER OR FILE ON DISK.
+#   All logs are in-memory only. All saves are no-ops.
 
 import hmac, hashlib, requests, string, random, json, time, os, sys, signal, threading, re, subprocess, importlib, codecs, base64, logging
 from datetime import datetime, timezone, timedelta
@@ -17,84 +20,40 @@ import warnings; warnings.filterwarnings("ignore")
 sys.path.append(os.getcwd())
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  FOLDERS — Vercel/serverless safe (NO makedirs, NO read-only writes)
+#  FOLDERS  (paths only — NEVER created on disk)
 # ═════════════════════════════════════════════════════════════════════════════
-def _pick_writable_dir():
-    """Return a writable base dir. Prefer /tmp on serverless; fall back to CWD."""
-    candidates = []
-    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
-        candidates.append("/tmp")
-    candidates.append("/tmp")
-    try:
-        candidates.append(os.getcwd())
-    except Exception:
-        pass
-    for c in candidates:
-        try:
-            if c and os.path.isdir(c) and os.access(c, os.W_OK):
-                probe = os.path.join(c, f".probe_{os.getpid()}_{int(time.time())}")
-                with open(probe, "wb") as fh:
-                    fh.write(b"x")
-                os.remove(probe)
-                return c
-        except Exception:
-            continue
-    return None
-
-_WRITABLE_BASE = _pick_writable_dir()
-
-if _WRITABLE_BASE:
-    BASE_FOLDER  = _WRITABLE_BASE
-    SAVED_FOLDER = _WRITABLE_BASE
-    LOGS_FOLDER  = _WRITABLE_BASE
-else:
-    BASE_FOLDER = SAVED_FOLDER = LOGS_FOLDER = None
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+BASE_FOLDER  = os.path.join(BASE_DIR, "YUTA_GEN")
+SAVED_FOLDER = os.path.join(BASE_FOLDER, "SAVED")
+LOGS_FOLDER  = os.path.join(BASE_FOLDER, "logs")
+# NOTE: no os.makedirs() — folder creation disabled by design.
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  LOGGER
+#  LOGGER  (in-memory only — no .log file is created)
 # ═════════════════════════════════════════════════════════════════════════════
+LOG_FILE = "(in-memory — no file created)"
 _LOGGER = logging.getLogger("YUTA")
 _LOGGER.setLevel(logging.DEBUG)
 _LOGGER.propagate = False
-
-if LOGS_FOLDER:
-    LOG_FILE = os.path.join(LOGS_FOLDER, f"gen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    try:
-        _fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                                           datefmt="%Y-%m-%d %H:%M:%S"))
-        _LOGGER.addHandler(_fh)
-    except Exception:
-        LOG_FILE = None
-else:
-    LOG_FILE = None
-
-_sh = logging.StreamHandler(sys.stderr)
-_sh.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
-_LOGGER.addHandler(_sh)
+# no FileHandler: absolutely no file created on disk
 
 def log(msg, level="INFO"):
-    try: _LOGGER.log(getattr(logging, level, logging.INFO), msg)
-    except Exception: pass
+    # Intentionally a no-op writer: we only keep the function signature.
+    # Nothing is written to disk. If you want console echo, uncomment below.
+    # print(f"[{level}] {msg}")
+    return
 
 def log_req(tag, url, headers, body):
-    try:
-        h = {k: (v if k != "Authorization" else v[:40] + "…") for k, v in headers.items()}
-        log(f"[REQ {tag}] POST {url}\n  HEADERS={json.dumps(h, ensure_ascii=False)}\n  BODY={body.hex()}", "DEBUG")
-    except Exception: pass
+    return
 
 def log_resp(tag, status, resp):
-    try:
-        log(f"[RESP {tag}] HTTP={status} len={len(resp)} hex={resp.hex()}", "DEBUG")
-    except Exception: pass
+    return
 
 def log_err(tag, exc):
-    try: log(f"[ERR {tag}] {type(exc).__name__}: {exc}", "ERROR")
-    except Exception: pass
+    return
 
 log("═" * 60, "INFO")
-log(f"YUTA GEN started — log file: {LOG_FILE or '(stderr only)'}", "INFO")
-log(f"Writable base: {_WRITABLE_BASE or '(none — in-memory only)'}", "INFO")
+log("YUTA GEN started (NO-FILE MODE)", "INFO")
 log("═" * 60, "INFO")
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -106,7 +65,6 @@ DEBUG_VERBOSE = os.environ.get("YUTA_DEBUG_VERBOSE", "1" if DEBUG_VERBOSE_MODE e
 _DEBUG_LOCK = threading.Lock()
 import traceback as _tb
 def dbg(tag, msg, exc=None, verbose_only=False):
-    log(f"[DBG {tag}] {msg}", "DEBUG")
     if not DEBUG: return
     if verbose_only and not DEBUG_VERBOSE: return
     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -118,8 +76,7 @@ def dbg(tag, msg, exc=None, verbose_only=False):
             sys.stderr.flush()
         except Exception: pass
 def dbg_exc(tag, exc):
-    log_err(tag, exc)
-    if DEBUG: dbg(tag, f"EXC {type(exc).__name__}: {exc}", exc=exc)
+    dbg(tag, f"EXC {type(exc).__name__}: {exc}", exc=exc)
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  CONSTANTS
@@ -175,7 +132,6 @@ SELECT_PRESET_BODY_128 = (
     "76 95 E3 77 68 EE A4 30 D2 8C E1 7D BD ED 18 B7 "
     "41 79 E2 CC 8D DC F8 B9 16 23 CE FD F4 D9 0C DB"
 )
-
 SELECT_PRESET_BODY_80 = (
     "C7 7B 8C 6E 5A FB 9F 08 55 F7 79 B7 59 9B B7 D2 "
     "69 43 95 B4 D1 06 94 02 D6 EC 9E B4 58 A5 23 53 "
@@ -183,7 +139,6 @@ SELECT_PRESET_BODY_80 = (
     "37 5D 47 DB F3 3B 25 F0 31 1D 79 97 44 F6 71 AA "
     "73 53 B5 27 3D 35 F9 5A AF 4F 22 53 61 BA 0A BB"
 )
-
 SELECT_PRESET_BODY_96 = (
     "70 77 28 E1 02 50 3C B6 04 CE 4B 8B CA A4 E0 AD "
     "83 DC 83 46 2F 09 CA A4 0F D2 28 4A 76 B7 7F C5 "
@@ -192,7 +147,6 @@ SELECT_PRESET_BODY_96 = (
     "9C D6 35 7D 6C 8E 4A 37 7E 89 D6 AD 77 0A 1E 39 "
     "2D 5B F4 CB 86 7A B5 8F BB 58 E7 D5 56 96 6B DD"
 )
-
 SELECT_PRESET_BODY_64 = (
     "14 DD 1B 72 2A B6 1D A9 DD D0 F4 F8 A8 04 57 3D "
     "60 04 4B D1 13 7B BF 96 5B 10 E9 4D FD 60 4F D7 "
@@ -368,7 +322,7 @@ def decode_nickname(encoded_b64):
         return f"[DECODE_ERROR: {e}]"
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  THEME — NEON PURPLE + CYAN
+#  THEME
 # ═════════════════════════════════════════════════════════════════════════════
 C_ = "\033[38;5;129m"
 G_ = "\033[38;5;51m"
@@ -407,7 +361,8 @@ def banner():
    ██║   ╚██████╔╝   ██║   ██║  ██║
    ╚═╝    ╚═════╝    ╚═╝   ╚═╝  ╚═╝{S_}""")
     draw_line()
-    print_box([f"{Y_}{B_}      ⚡ Y U T A PREMIUM GEN  [OB55] ⚡{S_}"])
+    print_box([f"{Y_}{B_}      ⚡ Y U T A PREMIUM GEN  [OB55] ⚡{S_}",
+               f"{W_}       (NO-FILE / NO-FOLDER MODE){S_}"])
     draw_line()
 
 FILE_LOCKS = {}
@@ -431,7 +386,6 @@ def install_requirements():
 EXIT = False
 def safe_exit(sig=None, fr=None):
     global EXIT; EXIT = True
-    log("SIGINT received — exiting", "WARNING")
     print(f"\n{G_}⚡ Goodbye!{S_}"); sys.exit(0)
 signal.signal(signal.SIGINT, safe_exit)
 signal.signal(signal.SIGTERM, safe_exit)
@@ -483,8 +437,6 @@ def register_guest(pw, s):
                "Authorization":f"Signature {sig}"}
     try:
         r = s.post(REGISTER_URL, headers=headers, data=body, timeout=25, verify=False)
-        log_req("register", REGISTER_URL, headers, body.encode())
-        log_resp("register", r.status_code, r.content or b"")
         if r.status_code == 429: time.sleep(4 + random.uniform(0, 3)); return None
         if r.status_code != 200: return None
         j = r.json()
@@ -503,8 +455,6 @@ def grant_guest(uid, pw, s):
                        "Content-Type":"application/json; charset=utf-8",
                        "User-Agent":OB55_MSDK_UA}
             r = s.post(GRANT_URL, headers=headers, data=body, timeout=25, verify=False)
-            log_req(f"grant/{label}", GRANT_URL, headers, body.encode())
-            log_resp(f"grant/{label}", r.status_code, r.content or b"")
             if r.status_code != 200: continue
             j = r.json()
             if j.get("code") != 0: continue
@@ -532,8 +482,6 @@ def major_register(at, oid, region, name, lang, s):
                    20: OB55_GAME_VER_REG, 21: 1, 22: OB55_DEVICE_BLOB}
         body = aes_encrypt(_build_proto(payload))
         r = s.post(MAJOR_REGISTER_URL, headers=headers, data=body, timeout=25, verify=False)
-        log_req("major_register", MAJOR_REGISTER_URL, headers, body)
-        log_resp("major_register", r.status_code, r.content or b"")
         resp = r.content or b""
         if r.status_code != 200 or not resp: return None, resp, {}
         fields, _ = decode_message(resp)
@@ -609,8 +557,6 @@ def major_login(aid, uid, region, at, oid, lang, s):
     for label, body in (("aes", aes_body), ("plain", plain)):
         try:
             r = s.post(MAJOR_LOGIN_URL, headers=headers, data=body, timeout=25, verify=False)
-            log_req(f"major_login/{label}", MAJOR_LOGIN_URL, headers, body)
-            log_resp(f"major_login/{label}", r.status_code, r.content or b"")
             resp = r.content or b""
             if r.status_code != 200 or len(resp) < 40: continue
             parsed = _parse_major_login_response(resp)
@@ -639,8 +585,6 @@ def choose_region(jwt, region, s):
              "X-GA": "v1 1", "X-GA-SV": str(int(time.time())),
              "ReleaseVersion": OB55_RELEASE_VER, "Host": LOGIN_HOST}
         r = s.post(CHOOSE_REGION_URL, data=payload, headers=h, timeout=25, verify=False)
-        log_req("choose_region", CHOOSE_REGION_URL, h, payload)
-        log_resp("choose_region", r.status_code, r.content or b"")
         body_txt = (r.content or b"").decode('utf-8', errors='ignore').strip()
         if r.status_code == 200: return True, "OK"
         if r.status_code == 400 and "REGION" in body_txt.upper(): return True, "ALREADY_BOUND"
@@ -664,8 +608,6 @@ def choose_newbie_choice(jwt, s):
             "X-Unity-Version": OB55_UNITY_VER,
         }
         r = s.post(CHOOSE_NEWBIE_URL, headers=h, data=body, timeout=25, verify=False)
-        log_req("choose_newbie", CHOOSE_NEWBIE_URL, h, body)
-        log_resp("choose_newbie", r.status_code, r.content or b"")
         return r.status_code == 200
     except Exception as e:
         dbg_exc("choose_newbie", e); return False
@@ -701,8 +643,6 @@ def get_login_data(jwt, at, oid, region, s):
              "User-Agent": OB55_UNITY_UA, "Host": CLIENT_HOST,
              "Connection": "close", "Accept-Encoding": "gzip, deflate, br"}
         r = s.post(GET_LOGIN_DATA_URL, headers=h, data=payload, timeout=20, verify=False)
-        log_req("get_login_data", GET_LOGIN_DATA_URL, h, payload)
-        log_resp("get_login_data", r.status_code, r.content or b"")
         return r.status_code == 200
     except Exception as e:
         dbg_exc("get_login_data", e); return False
@@ -728,8 +668,6 @@ def claim_maxim(jwt, s, retries=3):
         try:
             h = _maxim_headers(jwt, CLAIM_XGA)
             r = s.post(CLAIM_AVATAR_URL, headers=h, data=body, timeout=25, verify=False)
-            log_req("claim_maxim", CLAIM_AVATAR_URL, h, body)
-            log_resp("claim_maxim", r.status_code, r.content or b"")
             if r.status_code == 200: return "ok"
             if ALREADY_MARKER in (r.content or b""): return "already"
             try:
@@ -749,8 +687,6 @@ def set_maxim(jwt, s, retries=3):
         try:
             h = _maxim_headers(jwt, SET_XGA)
             r = s.post(SET_AVATAR_URL, headers=h, data=body, timeout=25, verify=False)
-            log_req("set_maxim", SET_AVATAR_URL, h, body)
-            log_resp("set_maxim", r.status_code, r.content or b"")
             if r.status_code == 200: return "ok"
             if r.status_code in (400, 404):
                 time.sleep(1.5 + attempt); continue
@@ -775,8 +711,6 @@ def get_newbie_guide_desc(jwt, s):
             "X-GA-SV": GET_NEWBIE_GUIDE_XGA, "X-Unity-Version": OB55_UNITY_VER,
         }
         r = s.post(GET_NEWBIE_GUIDE_URL, headers=h, data=body, timeout=20, verify=False)
-        log_req("get_newbie_guide", GET_NEWBIE_GUIDE_URL, h, body)
-        log_resp("get_newbie_guide", r.status_code, r.content or b"")
         if r.status_code != 200: return None
         resp = r.content or b""
         preset_ids = set()
@@ -798,7 +732,6 @@ def get_newbie_guide_desc(jwt, s):
         for pid in (102000037, 102000038, 102000039, 102000041, 102000042, 102000007):
             if _enc_var(pid) in resp: preset_ids.add(pid)
         preset_list = sorted(preset_ids)
-        log(f"[GUIDE] preset_ids={preset_list} has_target={EXPECTED_PRESET_ID in preset_ids}", "INFO")
         return {"preset_ids": preset_list, "has_target": EXPECTED_PRESET_ID in preset_ids}
     except Exception as e:
         dbg_exc("get_newbie_guide", e); return None
@@ -817,8 +750,6 @@ def give_newbie_roles(jwt, s, retries=3):
                 "X-GA-SV": GIVE_NEWBIE_ROLES_XGA, "X-Unity-Version": OB55_UNITY_VER,
             }
             r = s.post(GIVE_NEWBIE_ROLES_URL, headers=h, data=body, timeout=20, verify=False)
-            log_req("give_newbie_roles", GIVE_NEWBIE_ROLES_URL, h, body)
-            log_resp("give_newbie_roles", r.status_code, r.content or b"")
             if r.status_code == 200: return "ok"
             if r.status_code in (400, 404):
                 time.sleep(1.5 + attempt); continue
@@ -840,8 +771,6 @@ def get_fresh_stats(jwt, s):
             "X-GA-SV": GET_FRESH_STATS_XGA, "X-Unity-Version": OB55_UNITY_VER,
         }
         r = s.post(GET_FRESH_STATS_URL, headers=h, data=body, timeout=20, verify=False)
-        log_req("get_fresh_stats", GET_FRESH_STATS_URL, h, body)
-        log_resp("get_fresh_stats", r.status_code, r.content or b"")
         return r.status_code == 200
     except Exception as e:
         dbg_exc("get_fresh_stats", e); return False
@@ -859,14 +788,12 @@ def get_avatar_prof(jwt, s):
             "X-GA-SV": GET_AVATAR_PROF_XGA, "X-Unity-Version": OB55_UNITY_VER,
         }
         r = s.post(GET_AVATAR_PROF_URL, headers=h, data=body, timeout=20, verify=False)
-        log_req("get_avatar_prof", GET_AVATAR_PROF_URL, h, body)
-        log_resp("get_avatar_prof", r.status_code, r.content or b"")
         return r.status_code == 200
     except Exception as e:
         dbg_exc("get_avatar_prof", e); return False
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  GET PROFILES — extract character + skills
+#  GET PROFILES
 # ═════════════════════════════════════════════════════════════════════════════
 def _extract_items_from_profile(v):
     items = []
@@ -896,8 +823,6 @@ def get_profiles(jwt, s):
             "X-GA-SV": GET_PROFILES_XGA, "X-Unity-Version": OB55_UNITY_VER,
         }
         r = s.post(GET_PROFILES_URL, headers=h, data=body, timeout=20, verify=False)
-        log_req("get_profiles", GET_PROFILES_URL, h, body)
-        log_resp("get_profiles", r.status_code, r.content or b"")
         if r.status_code != 200: return []
         fields, _ = decode_message(r.content or b"")
         out = []
@@ -910,8 +835,6 @@ def get_profiles(jwt, s):
             items = _extract_items_from_profile(v)
             out.append({"id": pid, "active": active, "unlocked": unlocked,
                         "items": items, "raw": v})
-        for p in out:
-            log(f"[PROFILES] id={p['id']} active={p['active']} unlocked={p['unlocked']} items={p['items']}", "INFO")
         return out
     except Exception as e:
         dbg_exc("get_profiles", e); return []
@@ -943,14 +866,11 @@ def select_preset_loadout(jwt, s, body_hex, retries=3):
                 "X-GA-SV": _get_select_xga(), "X-Unity-Version": OB55_UNITY_VER,
             }
             r = s.post(SELECT_PRESET_URL, headers=h, data=body, timeout=25, verify=False)
-            log_req(f"select_preset({len(body)}b)", SELECT_PRESET_URL, h, body)
-            log_resp(f"select_preset({len(body)}b)", r.status_code, r.content or b"")
             if r.status_code != 200:
                 if r.status_code in (400, 404):
                     time.sleep(1.5 + attempt); continue
                 return f"err:HTTP {r.status_code}", None, {}
             fields, _ = decode_message(r.content or b"")
-            log(f"[SELECT_PRESET {len(body)}b] fields={fields}", "INFO")
             return "ok", None, fields
         except Exception as e:
             dbg_exc(f"select_preset({len(body)}b)/try{attempt+1}", e)
@@ -1021,7 +941,6 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
                     profs = get_profiles(jwt, s)
                     unlocked_presets = [p["id"] for p in profs if p["unlocked"] or p["active"]]
                     active_preset_before = next((p["id"] for p in profs if p["active"]), None)
-                    log(f"[PRESET] before: unlocked={unlocked_presets} active={active_preset_before}", "INFO")
 
                     st1, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_128)
                     select_seq.append(("128", st1))
@@ -1044,7 +963,6 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
                     for p in profs_after:
                         if p["id"] == EXPECTED_PRESET_ID:
                             preset_items = p["items"]
-                    log(f"[PRESET] after: active={active_preset_after} target_items={preset_items}", "INFO")
 
                     if active_preset_after == EXPECTED_PRESET_ID:
                         preset_verified = True
@@ -1057,9 +975,6 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
                         preset_status = "unverified"
 
         is_success = bool(aid and jwt)
-        log(f"[ACCOUNT] uid={uid} aid={aid} status={'SUCCESS' if is_success else 'FAIL'} "
-            f"guide={newbie_guide_status} roles={newbie_roles_status} "
-            f"preset={preset_status} verified={preset_verified} items={preset_items} seq={select_seq}", "INFO")
         return {
             "uid": uid, "password": pw,
             "account_id": aid or "N/A",
@@ -1088,46 +1003,14 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
     return None
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  MERGE SAVE — serverless safe
+#  MERGE SAVE — DISABLED (no file created)
 # ═════════════════════════════════════════════════════════════════════════════
 def save_merge_json(path, entry, key='uid'):
-    if not entry or key not in entry: return False, 0
-    if not SAVED_FOLDER:
-        log("[SAVE] skipped — no writable folder (in-memory only)", "WARNING")
+    # By design this does NOTHING on disk.
+    # Kept for API compatibility so the rest of the code works unchanged.
+    if not entry or key not in entry:
         return False, 0
-    full_path = path if os.path.isabs(path) else os.path.join(SAVED_FOLDER, path)
-    try:
-        parent = os.path.dirname(full_path)
-        if parent and not os.path.isdir(parent):
-            os.makedirs(parent, exist_ok=True)
-    except Exception as e:
-        dbg_exc("save_merge/mkdir", e)
-        return False, 0
-    with get_lock(full_path):
-        existing = []
-        if os.path.exists(full_path):
-            try:
-                with open(full_path, 'r', encoding='utf-8') as f: existing = json.load(f)
-                if not isinstance(existing, list): existing = []
-            except Exception: existing = []
-        seen = {}; order = []
-        for e in existing:
-            if isinstance(e, dict) and key in e:
-                if e[key] not in seen: order.append(e[key])
-                seen[e[key]] = e
-        is_new = entry[key] not in seen
-        if is_new: order.append(entry[key])
-        seen[entry[key]] = entry
-        out = [seen[k] for k in order]
-        tmp = full_path + '.tmp'
-        try:
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(out, f, indent=2, ensure_ascii=False)
-            os.replace(tmp, full_path)
-            log(f"[SAVE] {full_path} — total={len(out)} new={is_new}", "INFO")
-        except Exception as e:
-            dbg_exc("save_merge", e); return False, len(out)
-        return is_new, len(out)
+    return True, 0
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  RUNTIME
@@ -1151,7 +1034,6 @@ def generate_one(pw_prefix, nick_prefix, region, total, tid, main_file, detail_f
     res = create_account(pw_prefix, nick_prefix, region, tid, do_maxim=DO_MAXIM, do_preset=DO_PRESET)
     if not res:
         with LOCK: FAILED[0] += 1
-        log(f"[GEN] tid={tid} failed (no result)", "WARNING")
         return
     with LOCK:
         if OK >= total: return
@@ -1221,7 +1103,8 @@ def gen_flow():
     global OK, NEXT_TO_PRINT, EXIT, REGISTER_MIN_GAP, DO_MAXIM, DO_PRESET
     banner()
     print_box([f"{Y_}{B_}[#] ⚡ GENERATE ACCOUNTS ⚡{S_}",
-               f"{W_}Nickname + Newbie + Maxim + Preset 102000037 (4-step){S_}"])
+               f"{W_}Nickname + Newbie + Maxim + Preset 102000037 (4-step){S_}",
+               f"{W_}NO-FILE MODE: nothing saved on disk{S_}"])
     print_box([
         f"{Y_}[1]{S_} {W_}BD   {Y_}[2]{S_} {W_}IND   {Y_}[3]{S_} {W_}ID   {Y_}[4]{S_} {W_}VN{S_}",
         f"{Y_}[5]{S_} {W_}TH   {Y_}[6]{S_} {W_}PK    {Y_}[7]{S_} {W_}US   {Y_}[8]{S_} {W_}ME{S_}",
@@ -1249,11 +1132,11 @@ def gen_flow():
     p_ans = input(f"{Y_} [>] {W_}Auto preset 102000037? (y/n) [y]: {S_}").strip().lower() or "y"
     DO_PRESET = (p_ans != "n")
 
-    print_box([f"{W_}[💾] {C_}SAVE FILES{S_}",
-               f"{C_}Folder: {W_}{SAVED_FOLDER or '(in-memory only)'}{S_}",
-               f"{C_}Logs  : {W_}{LOG_FILE or '(stderr only)'}{S_}"])
-    main_file = input(f"{Y_} [>] {W_}Accounts file [accounts.json]: {S_}").strip() or "accounts.json"
-    detail_file = input(f"{Y_} [>] {W_}Details file [x.json]: {S_}").strip() or "x.json"
+    # NOTE: file name prompts kept for input flow only — nothing is written.
+    print_box([f"{W_}[💾] {C_}SAVE FILES (disabled){S_}",
+               f"{C_}This build does NOT write any file or folder.{S_}"])
+    main_file = input(f"{Y_} [>] {W_}Accounts file (ignored) [accounts.json]: {S_}").strip() or "accounts.json"
+    detail_file = input(f"{Y_} [>] {W_}Details file (ignored) [x.json]: {S_}").strip() or "x.json"
     if not main_file.endswith(".json"): main_file += ".json"
     if not detail_file.endswith(".json"): detail_file += ".json"
     banner()
@@ -1267,10 +1150,9 @@ def gen_flow():
         f"{C_}[⏱] Threads      : {Y_}{tc}{S_}",
         f"{C_}[⏱] Maxim Avatar : {Y_}{'ON' if DO_MAXIM else 'OFF'}{S_}",
         f"{C_}[⏱] Preset 102000037: {Y_}{'ON (4-step 128→80→96→64)' if DO_PRESET else 'OFF'}{S_}",
-        f"{C_}[⏱] Log File     : {W_}{LOG_FILE or '(stderr only)'}{S_}",
+        f"{C_}[⏱] Save Mode    : {W_}DISABLED (no file/folder created){S_}",
     ])
     draw_line()
-    log(f"[GEN] start region={region} total={total} threads={tc} maxim={DO_MAXIM} preset={DO_PRESET}", "INFO")
 
     OK = 0; NEXT_TO_PRINT = 1; EXIT = False
     FAILED[0] = 0; ATTEMPTS[0] = 0
@@ -1293,7 +1175,6 @@ def gen_flow():
             f"{C_}Failed so far     : {R_}{FAILED[0]}{S_}",
         ])
         draw_line()
-        log(f"[GEN] round {round_num} remaining={remaining}", "INFO")
 
         ts = []
         for i in range(tc):
@@ -1319,7 +1200,6 @@ def gen_flow():
             f"{C_}Generated : {G_}{OK}/{total}{S_}",
             f"{C_}Failed    : {R_}{failed_this_round}{S_}",
         ])
-        log(f"[GEN] round {round_num} done OK={OK} failed_this_round={failed_this_round}", "INFO")
         if failed_this_round < 5:
             print_box([f"{Y_}Fewer than 5 failures — stopping.{S_}"])
             break
@@ -1337,11 +1217,8 @@ def gen_flow():
         f"{C_}Failed    : {R_}{FAILED[0]}{S_}",
         f"{C_}Rounds    : {Y_}{round_num}{S_}",
         f"{C_}Time      : {Y_}{elapsed:.1f}s{S_}",
-        f"{C_}Main      : {W_}{(os.path.join(SAVED_FOLDER, main_file) if SAVED_FOLDER else '(in-memory only)')}{S_}",
-        f"{C_}Details   : {W_}{(os.path.join(SAVED_FOLDER, detail_file) if SAVED_FOLDER else '(in-memory only)')}{S_}",
-        f"{C_}Log File  : {W_}{LOG_FILE or '(stderr only)'}{S_}",
+        f"{C_}Files     : {W_}none (no-file mode){S_}",
     ])
-    log(f"[GEN] finished OK={OK}/{total} failed={FAILED[0]} elapsed={elapsed:.1f}s", "INFO")
     print(); draw_line()
     input(f"\n{C_} [↩] ENTER to return...{S_}")
 
@@ -1350,37 +1227,17 @@ def gen_flow():
 # ═════════════════════════════════════════════════════════════════════════════
 def view_saved():
     banner()
-    if not SAVED_FOLDER:
-        print_box([f"{R_}[!] No writable folder — nothing to view.{S_}"])
-        input(f"\n{C_} [↩] ENTER...{S_}"); return
-    print_box([f"{Y_}[#] ⚡ SAVED FILES ⚡{S_}", f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}"])
-    files = []
-    for folder, label in [(SAVED_FOLDER, "json"), (LOGS_FOLDER, "log")]:
-        if folder and os.path.exists(folder):
-            for f in os.listdir(folder):
-                if f.endswith("." + label): files.append((label, f))
-    if not files:
-        print_box([f"{R_}[!] Nothing saved yet.{S_}"]); input(f"\n{C_} [↩] ENTER...{S_}"); return
-    lines = [f"{Y_}{B_}📂 Files:{S_}"]
-    for label, f in sorted(files):
-        full = os.path.join(SAVED_FOLDER if label=="json" else LOGS_FOLDER, f)
-        try:
-            if label == "json":
-                with open(full, 'r', encoding='utf-8') as fh:
-                    cnt = len(json.load(fh))
-                lines.append(f"{C_}[📄] {f:<30} {G_}→ {cnt} accounts{S_}")
-            else:
-                sz = os.path.getsize(full)
-                lines.append(f"{C_}[🪵] {f:<30} {Y_}→ {sz} bytes{S_}")
-        except Exception: lines.append(f"{C_}[↩] {f}{S_}")
-    print_box(lines); print(); draw_line()
-    input(f"\n{C_} [↩] ENTER to return...{S_}")
+    print_box([f"{Y_}[#] ⚡ SAVED FILES ⚡{S_}",
+               f"{R_}This build does not save any file or folder.{S_}",
+               f"{W_}Accounts are shown in the console only.{S_}"])
+    input(f"\n{C_} [↩] ENTER...{S_}")
 
 def about():
     banner()
     print_box([
         f"{Y_}{B_}📋 Y U T A PREMIUM GEN [OB55]{S_}",
         f"{C_}[⚡] Devs    : {W_}YUTA{S_}",
+        f"{C_}[💾] Build   : {W_}NO-FILE MODE (no folder / no file){S_}",
         "",
         f"{Y_}{B_}PIPELINE:{S_}",
         f"{C_} register → grant → MajorRegister → MajorLogin{S_}",
@@ -1398,7 +1255,6 @@ def about():
         f"{C_} • items = character 5506 + skills 4806, 4106{S_}",
     ])
     draw_line()
-    print_box([f"{C_}Log file: {W_}{LOG_FILE or '(stderr only)'}{S_}"])
 
 def set_debug(enabled, verbose=None):
     global DEBUG, DEBUG_VERBOSE
@@ -1406,7 +1262,6 @@ def set_debug(enabled, verbose=None):
     if verbose is not None: DEBUG_VERBOSE = bool(verbose)
     tag = f"{G_ if DEBUG else R_}DEBUG={'ON' if DEBUG else 'OFF'} VERBOSE={'ON' if DEBUG_VERBOSE else 'OFF'}{S_}"
     print_box([f"{C_}[dbg] {tag}"])
-    log(f"[DBG] DEBUG={DEBUG} VERBOSE={DEBUG_VERBOSE}", "INFO")
 
 def main_menu():
     while True:
@@ -1431,11 +1286,9 @@ def main_menu():
                 else:                       set_debug(False, verbose=False)
                 time.sleep(1)
             elif c == "0":
-                log("User exit", "INFO")
                 print(f"\n{G_}⚡ Bye!{S_}"); sys.exit(0)
             else: print_box([f"{R_}[!] Invalid.{S_}"]); time.sleep(1)
         except KeyboardInterrupt:
-            log("KeyboardInterrupt in menu", "WARNING")
             sys.exit(0)
         except Exception as e:
             dbg_exc("main_menu", e)
@@ -1445,7 +1298,6 @@ if __name__ == "__main__":
     try:
         if install_requirements(): main_menu()
     except KeyboardInterrupt:
-        log("KeyboardInterrupt at top-level", "WARNING")
         print(f"\n{G_}⚡ Goodbye!{S_}"); sys.exit(0)
     except Exception as e:
         dbg_exc("__main__", e)
