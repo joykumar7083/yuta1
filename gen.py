@@ -17,25 +17,61 @@ import warnings; warnings.filterwarnings("ignore")
 sys.path.append(os.getcwd())
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  FOLDERS
+#  FOLDERS — Vercel/serverless safe (NO makedirs, NO read-only writes)
 # ═════════════════════════════════════════════════════════════════════════════
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_FOLDER = os.path.join(BASE_DIR, "YUTA_GEN")
-SAVED_FOLDER = os.path.join(BASE_FOLDER, "SAVED")
-LOGS_FOLDER = os.path.join(BASE_FOLDER, "logs")
-for d in [BASE_FOLDER, SAVED_FOLDER, LOGS_FOLDER]: os.makedirs(d, exist_ok=True)
+def _pick_writable_dir():
+    """Return a writable base dir. Prefer /tmp on serverless; fall back to CWD."""
+    candidates = []
+    if os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"):
+        candidates.append("/tmp")
+    candidates.append("/tmp")
+    try:
+        candidates.append(os.getcwd())
+    except Exception:
+        pass
+    for c in candidates:
+        try:
+            if c and os.path.isdir(c) and os.access(c, os.W_OK):
+                probe = os.path.join(c, f".probe_{os.getpid()}_{int(time.time())}")
+                with open(probe, "wb") as fh:
+                    fh.write(b"x")
+                os.remove(probe)
+                return c
+        except Exception:
+            continue
+    return None
+
+_WRITABLE_BASE = _pick_writable_dir()
+
+if _WRITABLE_BASE:
+    BASE_FOLDER  = _WRITABLE_BASE
+    SAVED_FOLDER = _WRITABLE_BASE
+    LOGS_FOLDER  = _WRITABLE_BASE
+else:
+    BASE_FOLDER = SAVED_FOLDER = LOGS_FOLDER = None
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  LOGGER
 # ═════════════════════════════════════════════════════════════════════════════
-LOG_FILE = os.path.join(LOGS_FOLDER, f"gen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 _LOGGER = logging.getLogger("YUTA")
 _LOGGER.setLevel(logging.DEBUG)
 _LOGGER.propagate = False
-_fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
-_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                                   datefmt="%Y-%m-%d %H:%M:%S"))
-_LOGGER.addHandler(_fh)
+
+if LOGS_FOLDER:
+    LOG_FILE = os.path.join(LOGS_FOLDER, f"gen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    try:
+        _fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                                           datefmt="%Y-%m-%d %H:%M:%S"))
+        _LOGGER.addHandler(_fh)
+    except Exception:
+        LOG_FILE = None
+else:
+    LOG_FILE = None
+
+_sh = logging.StreamHandler(sys.stderr)
+_sh.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+_LOGGER.addHandler(_sh)
 
 def log(msg, level="INFO"):
     try: _LOGGER.log(getattr(logging, level, logging.INFO), msg)
@@ -57,7 +93,8 @@ def log_err(tag, exc):
     except Exception: pass
 
 log("═" * 60, "INFO")
-log(f"YUTA GEN started — log file: {LOG_FILE}", "INFO")
+log(f"YUTA GEN started — log file: {LOG_FILE or '(stderr only)'}", "INFO")
+log(f"Writable base: {_WRITABLE_BASE or '(none — in-memory only)'}", "INFO")
 log("═" * 60, "INFO")
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -114,7 +151,7 @@ GIVE_NEWBIE_ROLES_XGA = "1792282124"
 GET_NEWBIE_GUIDE_XGA  = "1792282121"
 GET_FRESH_STATS_XGA   = "1792286287"
 GET_AVATAR_PROF_XGA   = "1792291359"
-SELECT_PRESET_XGA     = "1792293041"  # starting X-GA-SV (real time offset will be added)
+SELECT_PRESET_XGA     = "1792293041"
 
 AVATAR_ID          = 902000030
 CLAIM_BODY_HEX     = "F77E251D0B8C6860D2B99B0E287DE7FD"
@@ -128,8 +165,6 @@ GIVE_NEWBIE_ROLES_BODY_HEX = "EC 91 18 3D EF 30 AA 26 FA EF 2B BB EB 31 37 89"
 GET_NEWBIE_GUIDE_BODY_HEX  = "76 9E 07 AD 21 3C B2 7B EF 7B 54 24 F2 CC 76 D6"
 GET_PROFILES_BODY_HEX      = "1A 72 5B 2C 56 EC 52 BA 7D 09 62 34 54 C0 A0 03"
 
-# ✅ ৪টি body সঠিক sequence-এ
-# 1. 128-byte — default preset set
 SELECT_PRESET_BODY_128 = (
     "E6 B8 3B 7E 00 B0 9B CA 30 CE 37 FE 10 F8 ED 0E "
     "58 A4 3E 98 FA 7E 29 53 58 8D 2C 21 A2 5B CB 4F "
@@ -141,7 +176,6 @@ SELECT_PRESET_BODY_128 = (
     "41 79 E2 CC 8D DC F8 B9 16 23 CE FD F4 D9 0C DB"
 )
 
-# 2. 80-byte — 102000037 + skills
 SELECT_PRESET_BODY_80 = (
     "C7 7B 8C 6E 5A FB 9F 08 55 F7 79 B7 59 9B B7 D2 "
     "69 43 95 B4 D1 06 94 02 D6 EC 9E B4 58 A5 23 53 "
@@ -150,7 +184,6 @@ SELECT_PRESET_BODY_80 = (
     "73 53 B5 27 3D 35 F9 5A AF 4F 22 53 61 BA 0A BB"
 )
 
-# 3. 96-byte — 102000037 + character 5506 + full skills
 SELECT_PRESET_BODY_96 = (
     "70 77 28 E1 02 50 3C B6 04 CE 4B 8B CA A4 E0 AD "
     "83 DC 83 46 2F 09 CA A4 0F D2 28 4A 76 B7 7F C5 "
@@ -160,7 +193,6 @@ SELECT_PRESET_BODY_96 = (
     "2D 5B F4 CB 86 7A B5 8F BB 58 E7 D5 56 96 6B DD"
 )
 
-# 4. 64-byte — FINAL finalize
 SELECT_PRESET_BODY_64 = (
     "14 DD 1B 72 2A B6 1D A9 DD D0 F4 F8 A8 04 57 3D "
     "60 04 4B D1 13 7B BF 96 5B 10 E9 4D FD 60 4F D7 "
@@ -338,11 +370,11 @@ def decode_nickname(encoded_b64):
 # ═════════════════════════════════════════════════════════════════════════════
 #  THEME — NEON PURPLE + CYAN
 # ═════════════════════════════════════════════════════════════════════════════
-C_ = "\033[38;5;129m"   # neon purple
-G_ = "\033[38;5;51m"    # neon cyan
-R_ = "\033[38;5;196m"   # bright red
-Y_ = "\033[38;5;213m"   # neon pink
-W_ = "\033[38;5;255m"   # bright white
+C_ = "\033[38;5;129m"
+G_ = "\033[38;5;51m"
+R_ = "\033[38;5;196m"
+Y_ = "\033[38;5;213m"
+W_ = "\033[38;5;255m"
 B_ = "\033[1m"
 S_ = "\033[0m"
 
@@ -885,15 +917,12 @@ def get_profiles(jwt, s):
         dbg_exc("get_profiles", e); return []
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  SELECT PRESET LOADOUT — X-GA-SV সময়ের সাথে বাড়াতে হবে
+#  SELECT PRESET LOADOUT
 # ═════════════════════════════════════════════════════════════════════════════
 _SELECT_XGA_TS = [0.0]
 
 def _get_select_xga() -> str:
-    """Return an X-GA-SV close to 1792293041 + elapsed since start.
-    Real capture value was 1792293041 at ~09:26. We anchor there."""
     base = 1792293041
-    # base capture reference time (approx 09:26:29 UTC+6 on 18-Oct-2026)
     base_ts = int(datetime(2026, 10, 18, 9, 26, 29, tzinfo=BD_TZ).timestamp())
     now_ts = int(datetime.now(BD_TZ).timestamp())
     delta = now_ts - base_ts
@@ -967,7 +996,6 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
                 newbie_ok = choose_newbie_choice(jwt, s); time.sleep(0.3)
                 sealed = get_login_data(jwt, g["access_token"], g["open_id"], region, s); time.sleep(0.5)
 
-                # 1. Guide
                 guide = get_newbie_guide_desc(jwt, s)
                 if guide:
                     guide_preset_ids = guide.get("preset_ids", [])
@@ -976,51 +1004,41 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
                     newbie_guide_status = "err"
                 time.sleep(0.5)
 
-                # 2. Give roles (unlock 102000037)
                 newbie_roles_status = give_newbie_roles(jwt, s)
                 time.sleep(1.0)
 
-                # 3. Fresh stats
                 fresh_stats_ok = get_fresh_stats(jwt, s)
                 time.sleep(0.4)
 
-                # 4. Avatar proficiency
                 avatar_prof_ok = get_avatar_prof(jwt, s)
                 time.sleep(0.4)
 
-                # 5. Maxim
                 if do_maxim:
                     maxim_claim = claim_maxim(jwt, s); time.sleep(0.5)
                     maxim_set = set_maxim(jwt, s)
 
-                # 6. Preset — 4 bodies in correct sequence
                 if do_preset:
                     profs = get_profiles(jwt, s)
                     unlocked_presets = [p["id"] for p in profs if p["unlocked"] or p["active"]]
                     active_preset_before = next((p["id"] for p in profs if p["active"]), None)
                     log(f"[PRESET] before: unlocked={unlocked_presets} active={active_preset_before}", "INFO")
 
-                    # Step 1: 128-byte (default preset set)
                     st1, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_128)
                     select_seq.append(("128", st1))
                     time.sleep(0.5)
 
-                    # Step 2: 80-byte (102000037 + skills)
                     st2, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_80)
                     select_seq.append(("80", st2))
                     time.sleep(0.4)
 
-                    # Step 3: 96-byte (102000037 + character 5506 + full)
                     st3, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_96)
                     select_seq.append(("96", st3))
                     time.sleep(0.4)
 
-                    # Step 4: 64-byte FINAL
                     st4, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_64)
                     select_seq.append(("64", st4))
                     time.sleep(1.5)
 
-                    # 7. Verify
                     profs_after = get_profiles(jwt, s)
                     active_preset_after = next((p["id"] for p in profs_after if p["active"]), None)
                     for p in profs_after:
@@ -1028,7 +1046,6 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
                             preset_items = p["items"]
                     log(f"[PRESET] after: active={active_preset_after} target_items={preset_items}", "INFO")
 
-                    # Determine status
                     if active_preset_after == EXPECTED_PRESET_ID:
                         preset_verified = True
                         preset_status = "ok"
@@ -1071,11 +1088,21 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset
     return None
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  MERGE SAVE
+#  MERGE SAVE — serverless safe
 # ═════════════════════════════════════════════════════════════════════════════
 def save_merge_json(path, entry, key='uid'):
     if not entry or key not in entry: return False, 0
+    if not SAVED_FOLDER:
+        log("[SAVE] skipped — no writable folder (in-memory only)", "WARNING")
+        return False, 0
     full_path = path if os.path.isabs(path) else os.path.join(SAVED_FOLDER, path)
+    try:
+        parent = os.path.dirname(full_path)
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent, exist_ok=True)
+    except Exception as e:
+        dbg_exc("save_merge/mkdir", e)
+        return False, 0
     with get_lock(full_path):
         existing = []
         if os.path.exists(full_path):
@@ -1223,8 +1250,8 @@ def gen_flow():
     DO_PRESET = (p_ans != "n")
 
     print_box([f"{W_}[💾] {C_}SAVE FILES{S_}",
-               f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}",
-               f"{C_}Logs  : {W_}{LOG_FILE}{S_}"])
+               f"{C_}Folder: {W_}{SAVED_FOLDER or '(in-memory only)'}{S_}",
+               f"{C_}Logs  : {W_}{LOG_FILE or '(stderr only)'}{S_}"])
     main_file = input(f"{Y_} [>] {W_}Accounts file [accounts.json]: {S_}").strip() or "accounts.json"
     detail_file = input(f"{Y_} [>] {W_}Details file [x.json]: {S_}").strip() or "x.json"
     if not main_file.endswith(".json"): main_file += ".json"
@@ -1240,7 +1267,7 @@ def gen_flow():
         f"{C_}[⏱] Threads      : {Y_}{tc}{S_}",
         f"{C_}[⏱] Maxim Avatar : {Y_}{'ON' if DO_MAXIM else 'OFF'}{S_}",
         f"{C_}[⏱] Preset 102000037: {Y_}{'ON (4-step 128→80→96→64)' if DO_PRESET else 'OFF'}{S_}",
-        f"{C_}[⏱] Log File     : {W_}{LOG_FILE}{S_}",
+        f"{C_}[⏱] Log File     : {W_}{LOG_FILE or '(stderr only)'}{S_}",
     ])
     draw_line()
     log(f"[GEN] start region={region} total={total} threads={tc} maxim={DO_MAXIM} preset={DO_PRESET}", "INFO")
@@ -1310,9 +1337,9 @@ def gen_flow():
         f"{C_}Failed    : {R_}{FAILED[0]}{S_}",
         f"{C_}Rounds    : {Y_}{round_num}{S_}",
         f"{C_}Time      : {Y_}{elapsed:.1f}s{S_}",
-        f"{C_}Main      : {W_}{os.path.join(SAVED_FOLDER, main_file)}{S_}",
-        f"{C_}Details   : {W_}{os.path.join(SAVED_FOLDER, detail_file)}{S_}",
-        f"{C_}Log File  : {W_}{LOG_FILE}{S_}",
+        f"{C_}Main      : {W_}{(os.path.join(SAVED_FOLDER, main_file) if SAVED_FOLDER else '(in-memory only)')}{S_}",
+        f"{C_}Details   : {W_}{(os.path.join(SAVED_FOLDER, detail_file) if SAVED_FOLDER else '(in-memory only)')}{S_}",
+        f"{C_}Log File  : {W_}{LOG_FILE or '(stderr only)'}{S_}",
     ])
     log(f"[GEN] finished OK={OK}/{total} failed={FAILED[0]} elapsed={elapsed:.1f}s", "INFO")
     print(); draw_line()
@@ -1323,10 +1350,13 @@ def gen_flow():
 # ═════════════════════════════════════════════════════════════════════════════
 def view_saved():
     banner()
+    if not SAVED_FOLDER:
+        print_box([f"{R_}[!] No writable folder — nothing to view.{S_}"])
+        input(f"\n{C_} [↩] ENTER...{S_}"); return
     print_box([f"{Y_}[#] ⚡ SAVED FILES ⚡{S_}", f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}"])
     files = []
     for folder, label in [(SAVED_FOLDER, "json"), (LOGS_FOLDER, "log")]:
-        if os.path.exists(folder):
+        if folder and os.path.exists(folder):
             for f in os.listdir(folder):
                 if f.endswith("." + label): files.append((label, f))
     if not files:
@@ -1368,7 +1398,7 @@ def about():
         f"{C_} • items = character 5506 + skills 4806, 4106{S_}",
     ])
     draw_line()
-    print_box([f"{C_}Log file: {W_}{LOG_FILE}{S_}"])
+    print_box([f"{C_}Log file: {W_}{LOG_FILE or '(stderr only)'}{S_}"])
 
 def set_debug(enabled, verbose=None):
     global DEBUG, DEBUG_VERBOSE
