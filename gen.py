@@ -1,10 +1,13 @@
-# gen.py — A R A F A T PREMIUM GEN [OB55]
+# gen.py — Y U T A PREMIUM GEN [OB55]
 # Pipeline: register → grant → MajorRegister → MajorLogin → ChooseRegion
-#           → ChooseNewbieChoice → GetLoginData → ClaimMaxim → SetMaxim
-# Theme: 🔥 SUPER LAVA + BLOOD 🔥
-# Devs: A R A F A T | Channel: @arafatcodex
+#           → ChooseNewbieChoice → GetLoginData → GetNewbieGuideDesc
+#           → GiveAccountNewbieRoles → GetAccountFreshStatsInfo
+#           → GetAvatarProficiencyInfos → ClaimMaxim → SetMaxim
+#           → SelectPresetLoadout x4 (128→80→96→64) → GetProfiles verify
+# Theme: ⚡ NEON PURPLE + CYAN ⚡
+# Devs: YUTA
 
-import hmac, hashlib, requests, string, random, json, time, os, sys, signal, threading, re, subprocess, importlib, codecs, base64
+import hmac, hashlib, requests, string, random, json, time, os, sys, signal, threading, re, subprocess, importlib, codecs, base64, logging
 from datetime import datetime, timezone, timedelta
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
@@ -14,26 +17,71 @@ import warnings; warnings.filterwarnings("ignore")
 sys.path.append(os.getcwd())
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  DEBUG  (OFF)
+#  FOLDERS
+# ═════════════════════════════════════════════════════════════════════════════
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_FOLDER = os.path.join(BASE_DIR, "YUTA_GEN")
+SAVED_FOLDER = os.path.join(BASE_FOLDER, "SAVED")
+LOGS_FOLDER = os.path.join(BASE_FOLDER, "logs")
+for d in [BASE_FOLDER, SAVED_FOLDER, LOGS_FOLDER]: os.makedirs(d, exist_ok=True)
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  LOGGER
+# ═════════════════════════════════════════════════════════════════════════════
+LOG_FILE = os.path.join(LOGS_FOLDER, f"gen_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+_LOGGER = logging.getLogger("YUTA")
+_LOGGER.setLevel(logging.DEBUG)
+_LOGGER.propagate = False
+_fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
+                                   datefmt="%Y-%m-%d %H:%M:%S"))
+_LOGGER.addHandler(_fh)
+
+def log(msg, level="INFO"):
+    try: _LOGGER.log(getattr(logging, level, logging.INFO), msg)
+    except Exception: pass
+
+def log_req(tag, url, headers, body):
+    try:
+        h = {k: (v if k != "Authorization" else v[:40] + "…") for k, v in headers.items()}
+        log(f"[REQ {tag}] POST {url}\n  HEADERS={json.dumps(h, ensure_ascii=False)}\n  BODY={body.hex()}", "DEBUG")
+    except Exception: pass
+
+def log_resp(tag, status, resp):
+    try:
+        log(f"[RESP {tag}] HTTP={status} len={len(resp)} hex={resp.hex()}", "DEBUG")
+    except Exception: pass
+
+def log_err(tag, exc):
+    try: log(f"[ERR {tag}] {type(exc).__name__}: {exc}", "ERROR")
+    except Exception: pass
+
+log("═" * 60, "INFO")
+log(f"YUTA GEN started — log file: {LOG_FILE}", "INFO")
+log("═" * 60, "INFO")
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  DEBUG
 # ═════════════════════════════════════════════════════════════════════════════
 DEBUG_MODE, DEBUG_VERBOSE_MODE = False, False
-
-DEBUG         = os.environ.get("ARAFAT_DEBUG",         "1" if DEBUG_MODE else "0") != "0"
-DEBUG_VERBOSE = os.environ.get("ARAFAT_DEBUG_VERBOSE", "1" if DEBUG_VERBOSE_MODE else "0") == "1"
+DEBUG         = os.environ.get("YUTA_DEBUG",         "1" if DEBUG_MODE else "0") != "0"
+DEBUG_VERBOSE = os.environ.get("YUTA_DEBUG_VERBOSE", "1" if DEBUG_VERBOSE_MODE else "0") == "1"
 _DEBUG_LOCK = threading.Lock()
 import traceback as _tb
 def dbg(tag, msg, exc=None, verbose_only=False):
+    log(f"[DBG {tag}] {msg}", "DEBUG")
     if not DEBUG: return
     if verbose_only and not DEBUG_VERBOSE: return
     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     with _DEBUG_LOCK:
         try:
-            sys.stderr.write(f"\033[38;5;202m[DBG {ts}] [{tag}]\033[0m {msg}\n")
+            sys.stderr.write(f"\033[38;5;129m[DBG {ts}] [{tag}]\033[0m {msg}\n")
             if exc is not None:
                 _tb.print_exception(type(exc), exc, exc.__traceback__, file=sys.stderr)
             sys.stderr.flush()
         except Exception: pass
 def dbg_exc(tag, exc):
+    log_err(tag, exc)
     if DEBUG: dbg(tag, f"EXC {type(exc).__name__}: {exc}", exc=exc)
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -50,11 +98,23 @@ CHOOSE_REGION_URL  = f"https://{LOGIN_HOST}/ChooseRegion"
 CHOOSE_NEWBIE_URL  = f"https://{LOGIN_HOST}/ChooseNewbieChoice"
 GET_LOGIN_DATA_URL = f"https://{CLIENT_HOST}/GetLoginData"
 
-CLAIM_AVATAR_URL   = f"https://{CLIENT_HOST}/ClaimAvatarProficiencyAward"
-SET_AVATAR_URL     = f"https://{CLIENT_HOST}/ChooseHeadPic"
+CLAIM_AVATAR_URL       = f"https://{CLIENT_HOST}/ClaimAvatarProficiencyAward"
+SET_AVATAR_URL         = f"https://{CLIENT_HOST}/ChooseHeadPic"
+SELECT_PRESET_URL      = f"https://{CLIENT_HOST}/SelectPresetLoadout"
+GET_PROFILES_URL       = f"https://{CLIENT_HOST}/GetProfiles"
+GIVE_NEWBIE_ROLES_URL  = f"https://{CLIENT_HOST}/GiveAccountNewbieRoles"
+GET_NEWBIE_GUIDE_URL   = f"https://{CLIENT_HOST}/GetNewbieGuideDesc"
+GET_FRESH_STATS_URL    = f"https://{CLIENT_HOST}/GetAccountFreshStatsInfo"
+GET_AVATAR_PROF_URL    = f"https://{CLIENT_HOST}/GetAvatarProficiencyInfos"
 
-CLAIM_XGA          = "1790074935"
-SET_XGA            = "1790075041"
+CLAIM_XGA             = "1790074935"
+SET_XGA               = "1790075041"
+GET_PROFILES_XGA      = "1792282176"
+GIVE_NEWBIE_ROLES_XGA = "1792282124"
+GET_NEWBIE_GUIDE_XGA  = "1792282121"
+GET_FRESH_STATS_XGA   = "1792286287"
+GET_AVATAR_PROF_XGA   = "1792291359"
+SELECT_PRESET_XGA     = "1792293041"  # starting X-GA-SV (real time offset will be added)
 
 AVATAR_ID          = 902000030
 CLAIM_BODY_HEX     = "F77E251D0B8C6860D2B99B0E287DE7FD"
@@ -63,6 +123,52 @@ ALREADY_MARKER     = b"PROFILE_PROFICIENCY_AWARD_CLAIMED"
 
 CHOOSE_NEWBIE_XGA      = "1791524202"
 CHOOSE_NEWBIE_BODY_HEX = "3CE3A025334E4E014643A74B16ADB058"
+
+GIVE_NEWBIE_ROLES_BODY_HEX = "EC 91 18 3D EF 30 AA 26 FA EF 2B BB EB 31 37 89"
+GET_NEWBIE_GUIDE_BODY_HEX  = "76 9E 07 AD 21 3C B2 7B EF 7B 54 24 F2 CC 76 D6"
+GET_PROFILES_BODY_HEX      = "1A 72 5B 2C 56 EC 52 BA 7D 09 62 34 54 C0 A0 03"
+
+# ✅ ৪টি body সঠিক sequence-এ
+# 1. 128-byte — default preset set
+SELECT_PRESET_BODY_128 = (
+    "E6 B8 3B 7E 00 B0 9B CA 30 CE 37 FE 10 F8 ED 0E "
+    "58 A4 3E 98 FA 7E 29 53 58 8D 2C 21 A2 5B CB 4F "
+    "71 21 9C 42 26 E3 C2 B7 0D 92 7C CF 6A BE 5E 6E "
+    "57 DD 9E CD 02 9F BA 53 FC CA 94 3C 82 C2 E0 8C "
+    "EF 55 02 A0 5F C6 05 DB 8F 62 E7 F0 CF 14 07 0B "
+    "57 CB B5 4F 85 5E 50 6D 00 3B 9D 45 4F CA 2A 24 "
+    "76 95 E3 77 68 EE A4 30 D2 8C E1 7D BD ED 18 B7 "
+    "41 79 E2 CC 8D DC F8 B9 16 23 CE FD F4 D9 0C DB"
+)
+
+# 2. 80-byte — 102000037 + skills
+SELECT_PRESET_BODY_80 = (
+    "C7 7B 8C 6E 5A FB 9F 08 55 F7 79 B7 59 9B B7 D2 "
+    "69 43 95 B4 D1 06 94 02 D6 EC 9E B4 58 A5 23 53 "
+    "89 35 52 C8 B8 9C 1F A7 3E 70 A5 C7 C7 D1 7D 09 "
+    "37 5D 47 DB F3 3B 25 F0 31 1D 79 97 44 F6 71 AA "
+    "73 53 B5 27 3D 35 F9 5A AF 4F 22 53 61 BA 0A BB"
+)
+
+# 3. 96-byte — 102000037 + character 5506 + full skills
+SELECT_PRESET_BODY_96 = (
+    "70 77 28 E1 02 50 3C B6 04 CE 4B 8B CA A4 E0 AD "
+    "83 DC 83 46 2F 09 CA A4 0F D2 28 4A 76 B7 7F C5 "
+    "DB F9 A0 C7 1E 2A 1C E3 D0 33 39 13 37 A8 C6 48 "
+    "28 4B 74 E6 83 CE 25 64 2D 68 1C CA 5E 47 75 42 "
+    "9C D6 35 7D 6C 8E 4A 37 7E 89 D6 AD 77 0A 1E 39 "
+    "2D 5B F4 CB 86 7A B5 8F BB 58 E7 D5 56 96 6B DD"
+)
+
+# 4. 64-byte — FINAL finalize
+SELECT_PRESET_BODY_64 = (
+    "14 DD 1B 72 2A B6 1D A9 DD D0 F4 F8 A8 04 57 3D "
+    "60 04 4B D1 13 7B BF 96 5B 10 E9 4D FD 60 4F D7 "
+    "F1 0D 95 32 98 DA 6C BD E7 EE FB DA D7 4E 1E 53 "
+    "41 8C 37 B9 20 6E E5 03 A9 63 EE 7E 56 A9 56 51"
+)
+
+EXPECTED_PRESET_ID = 102000037
 
 OB55_MSDK_UA       = "GarenaMSDK/4.0.44(SM-S9160 ;Android 9;en;US;app 1.132.1 2019121229;)"
 OB55_UNITY_UA      = "UnityPlayer/2018.4.12f1 (UnityWebRequest/1.0, libcurl/8.5.0-DEV)"
@@ -96,7 +202,7 @@ _EXP_DIGITS = {'0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶
 MAX_NICK_LEN = 12
 
 def generate_nick(prefix):
-    prefix = (prefix or "ARAFAT").strip()[:MAX_NICK_LEN]
+    prefix = (prefix or "YUTA").strip()[:MAX_NICK_LEN]
     remaining = MAX_NICK_LEN - len(prefix)
     if remaining <= 0: return prefix
     digits = ''.join(str(random.randint(0, 9)) for _ in range(remaining))
@@ -131,6 +237,9 @@ def _build_proto(f):
 
 def aes_encrypt(data: bytes) -> bytes:
     return AES.new(AES_KEY, AES.MODE_CBC, AES_IV).encrypt(pad(data, AES.block_size))
+
+def aes_decrypt_unpad(data: bytes) -> bytes:
+    return unpad(AES.new(AES_KEY, AES.MODE_CBC, AES_IV).decrypt(data), AES.block_size)
 
 def _rv(data, pos):
     r = 0; s = 0
@@ -227,13 +336,13 @@ def decode_nickname(encoded_b64):
         return f"[DECODE_ERROR: {e}]"
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  LAVA + BLOOD THEME
+#  THEME — NEON PURPLE + CYAN
 # ═════════════════════════════════════════════════════════════════════════════
-C_ = "\033[38;5;202m"
-G_ = "\033[38;5;226m"
-R_ = "\033[38;5;160m"
-Y_ = "\033[38;5;208m"
-W_ = "\033[38;5;223m"
+C_ = "\033[38;5;129m"   # neon purple
+G_ = "\033[38;5;51m"    # neon cyan
+R_ = "\033[38;5;196m"   # bright red
+Y_ = "\033[38;5;213m"   # neon pink
+W_ = "\033[38;5;255m"   # bright white
 B_ = "\033[1m"
 S_ = "\033[0m"
 
@@ -259,52 +368,15 @@ def print_box(lines):
 def banner():
     clear()
     print(f"""{C_}{B_}
- █████╗ ██████╗  █████╗ ███████╗ █████╗ ████████╗
-██╔══██╗██╔══██╗██╔══██╗██╔════╝██╔══██╗╚══██╔══╝
-███████║██████╔╝███████║█████╗  ███████║   ██║   
-██╔══██║██╔══██╗██╔══██║██╔══╝  ██╔══██║   ██║   
-██║  ██║██║  ██║██║  ██║██║     ██║  ██║   ██║   
-╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝   ╚═╝  {S_}""")
+██╗   ██╗██╗   ██╗████████╗ █████╗ 
+╚██╗ ██╔╝██║   ██║╚══██╔══╝██╔══██╗
+ ╚████╔╝ ██║   ██║   ██║   ███████║
+  ╚██╔╝  ██║   ██║   ██║   ██╔══██║
+   ██║   ╚██████╔╝   ██║   ██║  ██║
+   ╚═╝    ╚═════╝    ╚═╝   ╚═╝  ╚═╝{S_}""")
     draw_line()
-    print_box([f"{Y_}{B_}      🔥 A R A F A T PREMIUM GEN  [OB55] 🔥{S_}"])
+    print_box([f"{Y_}{B_}      ⚡ Y U T A PREMIUM GEN  [OB55] ⚡{S_}"])
     draw_line()
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  FOLDERS  ── VERCEL-SAFE (uses /tmp on read-only filesystems)
-# ═════════════════════════════════════════════════════════════════════════════
-_IS_VERCEL = bool(os.environ.get("VERCEL")) or os.environ.get("VERCEL_ENV")
-_IS_LAMBDA = bool(os.environ.get("AWS_LAMBDA_FUNCTION_NAME")) or \
-             bool(os.environ.get("AWS_EXECUTION_ENV"))
-
-if _IS_VERCEL or _IS_LAMBDA:
-    # Vercel / AWS Lambda: only /tmp is writable
-    BASE_DIR = "/tmp"
-else:
-    try:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        # test writability
-        if not os.access(BASE_DIR, os.W_OK):
-            BASE_DIR = "/tmp"
-    except Exception:
-        BASE_DIR = "/tmp"
-
-BASE_FOLDER  = os.path.join(BASE_DIR, "ARAFAT_GEN")
-SAVED_FOLDER = os.path.join(BASE_FOLDER, "SAVED")
-
-# Safe folder creation — never crash on read-only FS
-try:
-    for d in (BASE_FOLDER, SAVED_FOLDER):
-        os.makedirs(d, exist_ok=True)
-except Exception as _e:
-    # On read-only FS, fall back to /tmp
-    try:
-        BASE_FOLDER  = "/tmp/ARAFAT_GEN"
-        SAVED_FOLDER = "/tmp/ARAFAT_GEN/SAVED"
-        for d in (BASE_FOLDER, SAVED_FOLDER):
-            os.makedirs(d, exist_ok=True)
-    except Exception:
-        # Last resort: disable saving (in-memory only)
-        pass
 
 FILE_LOCKS = {}
 def get_lock(f):
@@ -327,14 +399,10 @@ def install_requirements():
 EXIT = False
 def safe_exit(sig=None, fr=None):
     global EXIT; EXIT = True
-    print(f"\n{G_}🔥 Goodbye!{S_}"); sys.exit(0)
-
-# Signal handling — skip on Vercel/Lambda (main thread restrictions)
-try:
-    signal.signal(signal.SIGINT, safe_exit)
-    signal.signal(signal.SIGTERM, safe_exit)
-except Exception:
-    pass
+    log("SIGINT received — exiting", "WARNING")
+    print(f"\n{G_}⚡ Goodbye!{S_}"); sys.exit(0)
+signal.signal(signal.SIGINT, safe_exit)
+signal.signal(signal.SIGTERM, safe_exit)
 
 def gen_password(prefix):
     return f"{prefix}_{''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(8))}"
@@ -376,14 +444,15 @@ def register_guest(pw, s):
     body = json.dumps({"app_id": OB55_CLIENT_ID, "client_type": 2,
                        "password": pw, "source": 2}, separators=(',',':'))
     sig = hmac.new(OB55_CLIENT_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
+    headers = {"Accept":"application/json","Accept-Encoding":"gzip",
+               "Connection":"Keep-Alive",
+               "Content-Type":"application/json; charset=utf-8",
+               "User-Agent":OB55_MSDK_UA,
+               "Authorization":f"Signature {sig}"}
     try:
-        r = s.post(REGISTER_URL,
-                   headers={"Accept":"application/json","Accept-Encoding":"gzip",
-                            "Connection":"Keep-Alive",
-                            "Content-Type":"application/json; charset=utf-8",
-                            "User-Agent":OB55_MSDK_UA,
-                            "Authorization":f"Signature {sig}"},
-                   data=body, timeout=25, verify=False)
+        r = s.post(REGISTER_URL, headers=headers, data=body, timeout=25, verify=False)
+        log_req("register", REGISTER_URL, headers, body.encode())
+        log_resp("register", r.status_code, r.content or b"")
         if r.status_code == 429: time.sleep(4 + random.uniform(0, 3)); return None
         if r.status_code != 200: return None
         j = r.json()
@@ -397,12 +466,13 @@ def grant_guest(uid, pw, s):
             body = json.dumps({"client_id": OB55_CLIENT_ID, "client_secret": OB55_CLIENT_SECRET,
                                "client_type": 2, "device_id": "", "password": pw_val,
                                "response_type": "token", "uid": int(uid)}, separators=(',',':'))
-            r = s.post(GRANT_URL,
-                       headers={"Accept":"application/json","Accept-Encoding":"gzip",
-                                "Connection":"Keep-Alive",
-                                "Content-Type":"application/json; charset=utf-8",
-                                "User-Agent":OB55_MSDK_UA},
-                       data=body, timeout=25, verify=False)
+            headers = {"Accept":"application/json","Accept-Encoding":"gzip",
+                       "Connection":"Keep-Alive",
+                       "Content-Type":"application/json; charset=utf-8",
+                       "User-Agent":OB55_MSDK_UA}
+            r = s.post(GRANT_URL, headers=headers, data=body, timeout=25, verify=False)
+            log_req(f"grant/{label}", GRANT_URL, headers, body.encode())
+            log_resp(f"grant/{label}", r.status_code, r.content or b"")
             if r.status_code != 200: continue
             j = r.json()
             if j.get("code") != 0: continue
@@ -422,7 +492,7 @@ def major_register(at, oid, region, name, lang, s):
                "ReleaseVersion":OB55_RELEASE_VER,"User-Agent":OB55_UNITY_UA,
                "X-GA":"v1 1","X-GA-SV":str(int(time.time())),
                "X-Unity-Version":OB55_UNITY_VER}
-    prefix = ''.join(c for c in name if c not in '⁰¹²³⁴⁵⁶⁷⁸⁹') or "ARAFAT"
+    prefix = ''.join(c for c in name if c not in '⁰¹²³⁴⁵⁶⁷⁸⁹') or "YUTA"
 
     def _attempt(cand):
         payload = {1: cand, 2: at, 3: oid, 5: 102000007, 6: 4, 7: 1, 13: 1,
@@ -430,6 +500,8 @@ def major_register(at, oid, region, name, lang, s):
                    20: OB55_GAME_VER_REG, 21: 1, 22: OB55_DEVICE_BLOB}
         body = aes_encrypt(_build_proto(payload))
         r = s.post(MAJOR_REGISTER_URL, headers=headers, data=body, timeout=25, verify=False)
+        log_req("major_register", MAJOR_REGISTER_URL, headers, body)
+        log_resp("major_register", r.status_code, r.content or b"")
         resp = r.content or b""
         if r.status_code != 200 or not resp: return None, resp, {}
         fields, _ = decode_message(resp)
@@ -505,6 +577,8 @@ def major_login(aid, uid, region, at, oid, lang, s):
     for label, body in (("aes", aes_body), ("plain", plain)):
         try:
             r = s.post(MAJOR_LOGIN_URL, headers=headers, data=body, timeout=25, verify=False)
+            log_req(f"major_login/{label}", MAJOR_LOGIN_URL, headers, body)
+            log_resp(f"major_login/{label}", r.status_code, r.content or b"")
             resp = r.content or b""
             if r.status_code != 200 or len(resp) < 40: continue
             parsed = _parse_major_login_response(resp)
@@ -533,6 +607,8 @@ def choose_region(jwt, region, s):
              "X-GA": "v1 1", "X-GA-SV": str(int(time.time())),
              "ReleaseVersion": OB55_RELEASE_VER, "Host": LOGIN_HOST}
         r = s.post(CHOOSE_REGION_URL, data=payload, headers=h, timeout=25, verify=False)
+        log_req("choose_region", CHOOSE_REGION_URL, h, payload)
+        log_resp("choose_region", r.status_code, r.content or b"")
         body_txt = (r.content or b"").decode('utf-8', errors='ignore').strip()
         if r.status_code == 200: return True, "OK"
         if r.status_code == 400 and "REGION" in body_txt.upper(): return True, "ALREADY_BOUND"
@@ -556,6 +632,8 @@ def choose_newbie_choice(jwt, s):
             "X-Unity-Version": OB55_UNITY_VER,
         }
         r = s.post(CHOOSE_NEWBIE_URL, headers=h, data=body, timeout=25, verify=False)
+        log_req("choose_newbie", CHOOSE_NEWBIE_URL, h, body)
+        log_resp("choose_newbie", r.status_code, r.content or b"")
         return r.status_code == 200
     except Exception as e:
         dbg_exc("choose_newbie", e); return False
@@ -591,6 +669,8 @@ def get_login_data(jwt, at, oid, region, s):
              "User-Agent": OB55_UNITY_UA, "Host": CLIENT_HOST,
              "Connection": "close", "Accept-Encoding": "gzip, deflate, br"}
         r = s.post(GET_LOGIN_DATA_URL, headers=h, data=payload, timeout=20, verify=False)
+        log_req("get_login_data", GET_LOGIN_DATA_URL, h, payload)
+        log_resp("get_login_data", r.status_code, r.content or b"")
         return r.status_code == 200
     except Exception as e:
         dbg_exc("get_login_data", e); return False
@@ -614,8 +694,10 @@ def claim_maxim(jwt, s, retries=3):
     body = bytes.fromhex(CLAIM_BODY_HEX)
     for attempt in range(retries):
         try:
-            r = s.post(CLAIM_AVATAR_URL, headers=_maxim_headers(jwt, CLAIM_XGA),
-                       data=body, timeout=25, verify=False)
+            h = _maxim_headers(jwt, CLAIM_XGA)
+            r = s.post(CLAIM_AVATAR_URL, headers=h, data=body, timeout=25, verify=False)
+            log_req("claim_maxim", CLAIM_AVATAR_URL, h, body)
+            log_resp("claim_maxim", r.status_code, r.content or b"")
             if r.status_code == 200: return "ok"
             if ALREADY_MARKER in (r.content or b""): return "already"
             try:
@@ -633,8 +715,10 @@ def set_maxim(jwt, s, retries=3):
     body = bytes.fromhex(SET_BODY_HEX)
     for attempt in range(retries):
         try:
-            r = s.post(SET_AVATAR_URL, headers=_maxim_headers(jwt, SET_XGA),
-                       data=body, timeout=25, verify=False)
+            h = _maxim_headers(jwt, SET_XGA)
+            r = s.post(SET_AVATAR_URL, headers=h, data=body, timeout=25, verify=False)
+            log_req("set_maxim", SET_AVATAR_URL, h, body)
+            log_resp("set_maxim", r.status_code, r.content or b"")
             if r.status_code == 200: return "ok"
             if r.status_code in (400, 404):
                 time.sleep(1.5 + attempt); continue
@@ -644,9 +728,210 @@ def set_maxim(jwt, s, retries=3):
     return "err:all_retries_failed"
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  NEWBIE GUIDE
+# ═════════════════════════════════════════════════════════════════════════════
+def get_newbie_guide_desc(jwt, s):
+    try:
+        body = bytes.fromhex(re.sub(r'[^0-9a-fA-F]', '', GET_NEWBIE_GUIDE_BODY_HEX))
+        h = {
+            "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+            "Authorization": f"Bearer {jwt}",
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Host": CLIENT_HOST, "ReleaseVersion": OB55_RELEASE_VER,
+            "User-Agent": OB55_UNITY_UA, "X-GA": "v1 1",
+            "X-GA-SV": GET_NEWBIE_GUIDE_XGA, "X-Unity-Version": OB55_UNITY_VER,
+        }
+        r = s.post(GET_NEWBIE_GUIDE_URL, headers=h, data=body, timeout=20, verify=False)
+        log_req("get_newbie_guide", GET_NEWBIE_GUIDE_URL, h, body)
+        log_resp("get_newbie_guide", r.status_code, r.content or b"")
+        if r.status_code != 200: return None
+        resp = r.content or b""
+        preset_ids = set()
+        def _walk(d, depth=0):
+            if depth > 8: return
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    if isinstance(v, int) and 100_000_000 <= v <= 999_999_999:
+                        preset_ids.add(v)
+                    elif isinstance(v, (dict, bytes, bytearray)):
+                        _walk(v, depth + 1)
+            elif isinstance(d, (bytes, bytearray)):
+                try:
+                    nested, _ = decode_message(d)
+                    if nested: _walk(nested, depth + 1)
+                except Exception: pass
+        fields, _ = decode_message(resp)
+        _walk(fields)
+        for pid in (102000037, 102000038, 102000039, 102000041, 102000042, 102000007):
+            if _enc_var(pid) in resp: preset_ids.add(pid)
+        preset_list = sorted(preset_ids)
+        log(f"[GUIDE] preset_ids={preset_list} has_target={EXPECTED_PRESET_ID in preset_ids}", "INFO")
+        return {"preset_ids": preset_list, "has_target": EXPECTED_PRESET_ID in preset_ids}
+    except Exception as e:
+        dbg_exc("get_newbie_guide", e); return None
+
+def give_newbie_roles(jwt, s, retries=3):
+    body = bytes.fromhex(re.sub(r'[^0-9a-fA-F]', '', GIVE_NEWBIE_ROLES_BODY_HEX))
+    for attempt in range(retries):
+        try:
+            h = {
+                "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+                "Authorization": f"Bearer {jwt}",
+                "Content-Length": str(len(body)),
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": CLIENT_HOST, "ReleaseVersion": OB55_RELEASE_VER,
+                "User-Agent": OB55_UNITY_UA, "X-GA": "v1 1",
+                "X-GA-SV": GIVE_NEWBIE_ROLES_XGA, "X-Unity-Version": OB55_UNITY_VER,
+            }
+            r = s.post(GIVE_NEWBIE_ROLES_URL, headers=h, data=body, timeout=20, verify=False)
+            log_req("give_newbie_roles", GIVE_NEWBIE_ROLES_URL, h, body)
+            log_resp("give_newbie_roles", r.status_code, r.content or b"")
+            if r.status_code == 200: return "ok"
+            if r.status_code in (400, 404):
+                time.sleep(1.5 + attempt); continue
+            return f"err:HTTP {r.status_code}"
+        except Exception as e:
+            dbg_exc(f"give_newbie_roles/try{attempt+1}", e); time.sleep(1.0 + attempt)
+    return "err:all_retries_failed"
+
+def get_fresh_stats(jwt, s):
+    try:
+        body = bytes.fromhex(re.sub(r'[^0-9a-fA-F]', '', GET_PROFILES_BODY_HEX))
+        h = {
+            "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+            "Authorization": f"Bearer {jwt}",
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Host": CLIENT_HOST, "ReleaseVersion": OB55_RELEASE_VER,
+            "User-Agent": OB55_UNITY_UA, "X-GA": "v1 1",
+            "X-GA-SV": GET_FRESH_STATS_XGA, "X-Unity-Version": OB55_UNITY_VER,
+        }
+        r = s.post(GET_FRESH_STATS_URL, headers=h, data=body, timeout=20, verify=False)
+        log_req("get_fresh_stats", GET_FRESH_STATS_URL, h, body)
+        log_resp("get_fresh_stats", r.status_code, r.content or b"")
+        return r.status_code == 200
+    except Exception as e:
+        dbg_exc("get_fresh_stats", e); return False
+
+def get_avatar_prof(jwt, s):
+    try:
+        body = bytes.fromhex(re.sub(r'[^0-9a-fA-F]', '', GET_PROFILES_BODY_HEX))
+        h = {
+            "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+            "Authorization": f"Bearer {jwt}",
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Host": CLIENT_HOST, "ReleaseVersion": OB55_RELEASE_VER,
+            "User-Agent": OB55_UNITY_UA, "X-GA": "v1 1",
+            "X-GA-SV": GET_AVATAR_PROF_XGA, "X-Unity-Version": OB55_UNITY_VER,
+        }
+        r = s.post(GET_AVATAR_PROF_URL, headers=h, data=body, timeout=20, verify=False)
+        log_req("get_avatar_prof", GET_AVATAR_PROF_URL, h, body)
+        log_resp("get_avatar_prof", r.status_code, r.content or b"")
+        return r.status_code == 200
+    except Exception as e:
+        dbg_exc("get_avatar_prof", e); return False
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  GET PROFILES — extract character + skills
+# ═════════════════════════════════════════════════════════════════════════════
+def _extract_items_from_profile(v):
+    items = []
+    for fld, val in v.items():
+        if fld in (1, 3, 6, 8, 11):
+            continue
+        if isinstance(val, dict):
+            for sub_k, sub_v in val.items():
+                if isinstance(sub_v, int) and 1_000_000 <= sub_v <= 999_999_999:
+                    items.append((fld, sub_k, sub_v))
+                elif isinstance(sub_v, int) and 1 <= sub_v <= 999_999:
+                    items.append((fld, sub_k, sub_v))
+        elif isinstance(val, int) and 1_000_000 <= val <= 999_999_999:
+            items.append((fld, val))
+    return items
+
+def get_profiles(jwt, s):
+    try:
+        body = bytes.fromhex(re.sub(r'[^0-9a-fA-F]', '', GET_PROFILES_BODY_HEX))
+        h = {
+            "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+            "Authorization": f"Bearer {jwt}",
+            "Content-Length": str(len(body)),
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Host": CLIENT_HOST, "ReleaseVersion": OB55_RELEASE_VER,
+            "User-Agent": OB55_UNITY_UA, "X-GA": "v1 1",
+            "X-GA-SV": GET_PROFILES_XGA, "X-Unity-Version": OB55_UNITY_VER,
+        }
+        r = s.post(GET_PROFILES_URL, headers=h, data=body, timeout=20, verify=False)
+        log_req("get_profiles", GET_PROFILES_URL, h, body)
+        log_resp("get_profiles", r.status_code, r.content or b"")
+        if r.status_code != 200: return []
+        fields, _ = decode_message(r.content or b"")
+        out = []
+        for k, v in fields.items():
+            if not isinstance(v, dict): continue
+            pid = v.get(1)
+            if not pid: continue
+            active   = bool(v.get(6))
+            unlocked = bool(v.get(8))
+            items = _extract_items_from_profile(v)
+            out.append({"id": pid, "active": active, "unlocked": unlocked,
+                        "items": items, "raw": v})
+        for p in out:
+            log(f"[PROFILES] id={p['id']} active={p['active']} unlocked={p['unlocked']} items={p['items']}", "INFO")
+        return out
+    except Exception as e:
+        dbg_exc("get_profiles", e); return []
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  SELECT PRESET LOADOUT — X-GA-SV সময়ের সাথে বাড়াতে হবে
+# ═════════════════════════════════════════════════════════════════════════════
+_SELECT_XGA_TS = [0.0]
+
+def _get_select_xga() -> str:
+    """Return an X-GA-SV close to 1792293041 + elapsed since start.
+    Real capture value was 1792293041 at ~09:26. We anchor there."""
+    base = 1792293041
+    # base capture reference time (approx 09:26:29 UTC+6 on 18-Oct-2026)
+    base_ts = int(datetime(2026, 10, 18, 9, 26, 29, tzinfo=BD_TZ).timestamp())
+    now_ts = int(datetime.now(BD_TZ).timestamp())
+    delta = now_ts - base_ts
+    if delta < 0: delta = 0
+    return str(base + delta)
+
+def select_preset_loadout(jwt, s, body_hex, retries=3):
+    body = bytes.fromhex(re.sub(r'[^0-9a-fA-F]', '', body_hex))
+    for attempt in range(retries):
+        try:
+            h = {
+                "Accept": "*/*", "Accept-Encoding": "deflate, gzip",
+                "Authorization": f"Bearer {jwt}",
+                "Content-Length": str(len(body)),
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Host": CLIENT_HOST, "ReleaseVersion": OB55_RELEASE_VER,
+                "User-Agent": OB55_UNITY_UA, "X-GA": "v1 1",
+                "X-GA-SV": _get_select_xga(), "X-Unity-Version": OB55_UNITY_VER,
+            }
+            r = s.post(SELECT_PRESET_URL, headers=h, data=body, timeout=25, verify=False)
+            log_req(f"select_preset({len(body)}b)", SELECT_PRESET_URL, h, body)
+            log_resp(f"select_preset({len(body)}b)", r.status_code, r.content or b"")
+            if r.status_code != 200:
+                if r.status_code in (400, 404):
+                    time.sleep(1.5 + attempt); continue
+                return f"err:HTTP {r.status_code}", None, {}
+            fields, _ = decode_message(r.content or b"")
+            log(f"[SELECT_PRESET {len(body)}b] fields={fields}", "INFO")
+            return "ok", None, fields
+        except Exception as e:
+            dbg_exc(f"select_preset({len(body)}b)/try{attempt+1}", e)
+            time.sleep(1.0 + attempt)
+    return "err:all_retries_failed", None, {}
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  ACCOUNT CREATION
 # ═════════════════════════════════════════════════════════════════════════════
-def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True):
+def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True, do_preset=True):
     if EXIT: return None
     s = get_session()
     for attempt in range(3):
@@ -665,28 +950,99 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True):
         lr = None; jwt = ""; nick = "N/A"
         chosen = False; region_note = ""
         sealed = False; newbie_ok = False
+        newbie_guide_status = "skipped"; newbie_roles_status = "skipped"
+        guide_preset_ids = []; fresh_stats_ok = False; avatar_prof_ok = False
         maxim_claim = "skipped"; maxim_set = "skipped"
+        preset_status = "skipped"; preset_char_id = None; preset_verified = False
+        preset_items = []
+        select_seq = []
+        unlocked_presets = []; active_preset_before = None; active_preset_after = None
 
         if aid:
             lr = major_login(aid, uid, region, at=g["access_token"], oid=g["open_id"], lang=lang, s=s)
             if lr and lr.get("jwt_token"):
                 jwt = lr["jwt_token"]; nick = lr.get("nickname", "") or "N/A"
 
-                chosen, region_note = choose_region(jwt, region, s)
-                time.sleep(0.3)
+                chosen, region_note = choose_region(jwt, region, s); time.sleep(0.3)
+                newbie_ok = choose_newbie_choice(jwt, s); time.sleep(0.3)
+                sealed = get_login_data(jwt, g["access_token"], g["open_id"], region, s); time.sleep(0.5)
 
-                newbie_ok = choose_newbie_choice(jwt, s)
-                time.sleep(0.3)
+                # 1. Guide
+                guide = get_newbie_guide_desc(jwt, s)
+                if guide:
+                    guide_preset_ids = guide.get("preset_ids", [])
+                    newbie_guide_status = "ok"
+                else:
+                    newbie_guide_status = "err"
+                time.sleep(0.5)
 
-                sealed = get_login_data(jwt, g["access_token"], g["open_id"], region, s)
+                # 2. Give roles (unlock 102000037)
+                newbie_roles_status = give_newbie_roles(jwt, s)
                 time.sleep(1.0)
 
+                # 3. Fresh stats
+                fresh_stats_ok = get_fresh_stats(jwt, s)
+                time.sleep(0.4)
+
+                # 4. Avatar proficiency
+                avatar_prof_ok = get_avatar_prof(jwt, s)
+                time.sleep(0.4)
+
+                # 5. Maxim
                 if do_maxim:
-                    maxim_claim = claim_maxim(jwt, s)
-                    time.sleep(0.5)
+                    maxim_claim = claim_maxim(jwt, s); time.sleep(0.5)
                     maxim_set = set_maxim(jwt, s)
 
+                # 6. Preset — 4 bodies in correct sequence
+                if do_preset:
+                    profs = get_profiles(jwt, s)
+                    unlocked_presets = [p["id"] for p in profs if p["unlocked"] or p["active"]]
+                    active_preset_before = next((p["id"] for p in profs if p["active"]), None)
+                    log(f"[PRESET] before: unlocked={unlocked_presets} active={active_preset_before}", "INFO")
+
+                    # Step 1: 128-byte (default preset set)
+                    st1, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_128)
+                    select_seq.append(("128", st1))
+                    time.sleep(0.5)
+
+                    # Step 2: 80-byte (102000037 + skills)
+                    st2, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_80)
+                    select_seq.append(("80", st2))
+                    time.sleep(0.4)
+
+                    # Step 3: 96-byte (102000037 + character 5506 + full)
+                    st3, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_96)
+                    select_seq.append(("96", st3))
+                    time.sleep(0.4)
+
+                    # Step 4: 64-byte FINAL
+                    st4, _, _ = select_preset_loadout(jwt, s, SELECT_PRESET_BODY_64)
+                    select_seq.append(("64", st4))
+                    time.sleep(1.5)
+
+                    # 7. Verify
+                    profs_after = get_profiles(jwt, s)
+                    active_preset_after = next((p["id"] for p in profs_after if p["active"]), None)
+                    for p in profs_after:
+                        if p["id"] == EXPECTED_PRESET_ID:
+                            preset_items = p["items"]
+                    log(f"[PRESET] after: active={active_preset_after} target_items={preset_items}", "INFO")
+
+                    # Determine status
+                    if active_preset_after == EXPECTED_PRESET_ID:
+                        preset_verified = True
+                        preset_status = "ok"
+                        preset_char_id = EXPECTED_PRESET_ID
+                    elif preset_items:
+                        preset_status = "unlocked_with_items"
+                        preset_char_id = EXPECTED_PRESET_ID
+                    else:
+                        preset_status = "unverified"
+
         is_success = bool(aid and jwt)
+        log(f"[ACCOUNT] uid={uid} aid={aid} status={'SUCCESS' if is_success else 'FAIL'} "
+            f"guide={newbie_guide_status} roles={newbie_roles_status} "
+            f"preset={preset_status} verified={preset_verified} items={preset_items} seq={select_seq}", "INFO")
         return {
             "uid": uid, "password": pw,
             "account_id": aid or "N/A",
@@ -697,7 +1053,17 @@ def create_account(pw_prefix, nick_prefix, region, tid, do_maxim=True):
             "token_type": g["token_type"], "jwt_token": jwt,
             "region_bound": chosen, "region_note": region_note,
             "sealed": sealed, "newbie_choice": newbie_ok,
+            "newbie_guide": newbie_guide_status, "guide_preset_ids": guide_preset_ids,
+            "newbie_roles": newbie_roles_status, "fresh_stats": fresh_stats_ok,
+            "avatar_prof": avatar_prof_ok,
             "maxim_claim": maxim_claim, "maxim_set": maxim_set,
+            "preset_loadout": preset_status, "preset_char_id": preset_char_id,
+            "preset_verified": preset_verified,
+            "preset_items": preset_items,
+            "select_seq": select_seq,
+            "unlocked_presets": unlocked_presets,
+            "active_preset_before": active_preset_before,
+            "active_preset_after": active_preset_after,
             "maxim_avatar_id": AVATAR_ID,
             "status": "SUCCESS" if is_success else ("PARTIAL" if aid else "NO_ACCOUNT_ID"),
             "date_created": bd_now_str(), "thread_id": tid,
@@ -731,6 +1097,7 @@ def save_merge_json(path, entry, key='uid'):
             with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(out, f, indent=2, ensure_ascii=False)
             os.replace(tmp, full_path)
+            log(f"[SAVE] {full_path} — total={len(out)} new={is_new}", "INFO")
         except Exception as e:
             dbg_exc("save_merge", e); return False, len(out)
         return is_new, len(out)
@@ -742,6 +1109,7 @@ LOCK = threading.Lock()
 OK = 0
 NEXT_TO_PRINT = 1
 DO_MAXIM = True
+DO_PRESET = True
 FAILED = [0]
 ATTEMPTS = [0]
 
@@ -753,9 +1121,10 @@ def generate_one(pw_prefix, nick_prefix, region, total, tid, main_file, detail_f
         if ATTEMPTS[0] <= 0: return
         ATTEMPTS[0] -= 1
     time.sleep(random.uniform(0.3, 1.0))
-    res = create_account(pw_prefix, nick_prefix, region, tid, do_maxim=DO_MAXIM)
+    res = create_account(pw_prefix, nick_prefix, region, tid, do_maxim=DO_MAXIM, do_preset=DO_PRESET)
     if not res:
         with LOCK: FAILED[0] += 1
+        log(f"[GEN] tid={tid} failed (no result)", "WARNING")
         return
     with LOCK:
         if OK >= total: return
@@ -769,10 +1138,21 @@ def generate_one(pw_prefix, nick_prefix, region, total, tid, main_file, detail_f
         sc = G_ if res["status"] == "SUCCESS" else Y_
         mc = G_ if res.get("maxim_claim") == "ok" else (Y_ if res.get("maxim_claim") == "already" else (R_ if str(res.get("maxim_claim","")).startswith("err") else W_))
         ms = G_ if res.get("maxim_set") == "ok" else (R_ if str(res.get("maxim_set","")).startswith("err") else W_)
+        ps = G_ if res.get("preset_loadout") == "ok" else (Y_ if res.get("preset_loadout") == "unlocked_with_items" else (R_ if str(res.get("preset_loadout","")).startswith("err") else W_))
+        pv = G_ if res.get("preset_verified") else (Y_ if res.get("preset_items") else R_)
+        nr = G_ if res.get("newbie_roles") == "ok" else (R_ if str(res.get("newbie_roles","")).startswith("err") else W_)
+        ng = G_ if res.get("newbie_guide") == "ok" else W_
         sd = G_ if res.get("sealed") else R_
         nb = G_ if res.get("newbie_choice") else R_
+        up = ",".join(str(x) for x in res.get("unlocked_presets", [])) or "N/A"
+        gp = ",".join(str(x) for x in res.get("guide_preset_ids", [])) or "N/A"
+        act_after = res.get("active_preset_after", "N/A")
+        items = res.get("preset_items", [])
+        items_str = ",".join(f"{t[0]}:{t[-1]}" for t in items) if items else "N/A"
+        seq = res.get("select_seq", [])
+        seq_str = "→".join(f"{s[0]}:{s[1]}" for s in seq) if seq else "N/A"
         print_box([
-            f"{Y_}[🔥] #{cur}/{total}{S_}",
+            f"{Y_}[⚡] #{cur}/{total}{S_}",
             f"{C_}[🔑] UID        : {W_}{res['uid']}{S_}",
             f"{C_}[🔒] PASSWORD   : {W_}{res['password']}{S_}",
             f"{C_}[🎮] GAME ID    : {W_}{res['account_id']}{S_}",
@@ -780,10 +1160,19 @@ def generate_one(pw_prefix, nick_prefix, region, total, tid, main_file, detail_f
             f"{C_}[🌍] REGION     : {W_}{res['region']}{S_}",
             f"{C_}[🎁] NEWBIE     : {nb}{res.get('newbie_choice')}{S_}",
             f"{C_}[🔐] SEALED     : {sd}{res.get('sealed')}{S_}",
+            f"{C_}[📖] NEWBIE GUIDE: {ng}{res.get('newbie_guide','skipped')}{S_}",
+            f"{C_}[📖] GUIDE PRESETS: {W_}{gp}{S_}",
+            f"{C_}[🧑‍🎓] NEWBIE ROLES: {nr}{res.get('newbie_roles','skipped')}{S_}",
             f"{C_}[🎭] MAXIM CLAIM: {mc}{res.get('maxim_claim','skipped')}{S_}",
             f"{C_}[🎭] MAXIM SET  : {ms}{res.get('maxim_set','skipped')}{S_}",
+            f"{C_}[📚] UNLOCKED   : {W_}{up}{S_}",
+            f"{C_}[🧩] SELECT SEQ : {W_}{seq_str}{S_}",
+            f"{C_}[🧩] PRESET LOADOUT: {ps}{res.get('preset_loadout','skipped')}{S_}",
+            f"{C_}[🎯] PRESET CHAR ID: {pv}{res.get('preset_char_id','N/A')} "
+            f"({'VERIFIED' if res.get('preset_verified') else ('UNLOCKED+ITEMS' if res.get('preset_items') else 'NOT VERIFIED')}){S_}",
+            f"{C_}[🧬] PRESET ITEMS  : {W_}{items_str}{S_}",
+            f"{C_}[🔍] ACTIVE AFTER: {G_ if act_after==EXPECTED_PRESET_ID else W_}{act_after}{S_}",
             f"{C_}[📊] STATUS     : {sc}{res['status']}{S_}",
-            f"{C_}[🎫] JWT        : {W_}{(res['jwt_token'][:36] + '…') if res['jwt_token'] else 'N/A'}{S_}",
             f"{C_}[⏰] TIME       : {W_}{res['date_created']}{S_}",
         ])
         NEXT_TO_PRINT += 1
@@ -802,10 +1191,10 @@ def _worker(pw_prefix, nick_prefix, region, total, tid, main_file, detail_file):
 #  GEN FLOW
 # ═════════════════════════════════════════════════════════════════════════════
 def gen_flow():
-    global OK, NEXT_TO_PRINT, EXIT, REGISTER_MIN_GAP, DO_MAXIM
+    global OK, NEXT_TO_PRINT, EXIT, REGISTER_MIN_GAP, DO_MAXIM, DO_PRESET
     banner()
-    print_box([f"{Y_}{B_}[#] 🔥 GENERATE ACCOUNTS 🔥{S_}",
-               f"{W_}Nickname + Newbie + Maxim Avatar{S_}"])
+    print_box([f"{Y_}{B_}[#] ⚡ GENERATE ACCOUNTS ⚡{S_}",
+               f"{W_}Nickname + Newbie + Maxim + Preset 102000037 (4-step){S_}"])
     print_box([
         f"{Y_}[1]{S_} {W_}BD   {Y_}[2]{S_} {W_}IND   {Y_}[3]{S_} {W_}ID   {Y_}[4]{S_} {W_}VN{S_}",
         f"{Y_}[5]{S_} {W_}TH   {Y_}[6]{S_} {W_}PK    {Y_}[7]{S_} {W_}US   {Y_}[8]{S_} {W_}ME{S_}",
@@ -814,8 +1203,8 @@ def gen_flow():
     rm = {"1":"BD","2":"IND","3":"ID","4":"VN","5":"TH","6":"PK","7":"US","8":"ME","9":"BR"}
     c = input(f"{Y_} [>] {W_}Region (default 1=BD): {S_}").strip() or "1"
     region = rm.get(c, "OTHER")
-    nick_prefix = input(f"{Y_} [>] {W_}Nickname Prefix [CODEX]: {S_}").strip() or "CODEX"
-    pp = input(f"{Y_} [>] {W_}Password Prefix [Create_By_@arafatcodex]: {S_}").strip() or "Create_By_@arafatcodex"
+    nick_prefix = input(f"{Y_} [>] {W_}Nickname Prefix [YUTA]: {S_}").strip() or "YUTA"
+    pp = input(f"{Y_} [>] {W_}Password Prefix [YUTA_GEN]: {S_}").strip() or "YUTA_GEN"
     while True:
         try:
             total = int(input(f"{Y_} [>] {W_}Total Accounts: {S_}").strip())
@@ -827,27 +1216,34 @@ def gen_flow():
     except Exception: tc = 3
     REGISTER_MIN_GAP = max(0.5, tc * 0.4)
 
-    m_ans = input(f"{Y_} [>] {W_}Auto claim + set Maxim avatar? (y/n) [y]: {S_}").strip().lower() or "y"
+    m_ans = input(f"{Y_} [>] {W_}Auto Maxim avatar? (y/n) [y]: {S_}").strip().lower() or "y"
     DO_MAXIM = (m_ans != "n")
 
-    print_box([f"{W_}[💾] {C_}SAVE FILES{S_}", f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}"])
-    main_file = input(f"{Y_} [>] {W_}Accounts file (uid+password) [accounts.json]: {S_}").strip() or "accounts.json"
-    detail_file = input(f"{Y_} [>] {W_}Details file (full info)    [x.json]: {S_}").strip() or "x.json"
+    p_ans = input(f"{Y_} [>] {W_}Auto preset 102000037? (y/n) [y]: {S_}").strip().lower() or "y"
+    DO_PRESET = (p_ans != "n")
+
+    print_box([f"{W_}[💾] {C_}SAVE FILES{S_}",
+               f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}",
+               f"{C_}Logs  : {W_}{LOG_FILE}{S_}"])
+    main_file = input(f"{Y_} [>] {W_}Accounts file [accounts.json]: {S_}").strip() or "accounts.json"
+    detail_file = input(f"{Y_} [>] {W_}Details file [x.json]: {S_}").strip() or "x.json"
     if not main_file.endswith(".json"): main_file += ".json"
     if not detail_file.endswith(".json"): detail_file += ".json"
     banner()
     preview = generate_nick(nick_prefix)
     print_box([
-        f"{G_}{B_}[🚀] START — LAVA ROUND 🔥{S_}",
+        f"{G_}{B_}[🚀] START — NEON ROUND ⚡{S_}",
         f"{C_}[⏱] Region       : {Y_}{region}{S_}",
         f"{C_}[⏱] Nick Prefix  : {Y_}{nick_prefix}  (e.g. {preview}){S_}",
         f"{C_}[⏱] Pass Prefix  : {Y_}{pp}{S_}",
         f"{C_}[⏱] Target       : {Y_}{total}{S_}",
         f"{C_}[⏱] Threads      : {Y_}{tc}{S_}",
-        f"{C_}[⏱] Maxim Avatar : {Y_}{'ON (claim + set)' if DO_MAXIM else 'OFF'}{S_}",
-        f"{C_}[⏱] Retry Fills  : {Y_}max 3 rounds if ≥5 fail{S_}",
+        f"{C_}[⏱] Maxim Avatar : {Y_}{'ON' if DO_MAXIM else 'OFF'}{S_}",
+        f"{C_}[⏱] Preset 102000037: {Y_}{'ON (4-step 128→80→96→64)' if DO_PRESET else 'OFF'}{S_}",
+        f"{C_}[⏱] Log File     : {W_}{LOG_FILE}{S_}",
     ])
     draw_line()
+    log(f"[GEN] start region={region} total={total} threads={tc} maxim={DO_MAXIM} preset={DO_PRESET}", "INFO")
 
     OK = 0; NEXT_TO_PRINT = 1; EXIT = False
     FAILED[0] = 0; ATTEMPTS[0] = 0
@@ -864,12 +1260,13 @@ def gen_flow():
 
         print()
         print_box([
-            f"{Y_}{B_}🔥 ROUND {round_num}/{MAX_ROUNDS} 🔥{S_}",
+            f"{Y_}{B_}⚡ ROUND {round_num}/{MAX_ROUNDS} ⚡{S_}",
             f"{C_}Remaining to fill : {Y_}{remaining}{S_}",
             f"{C_}Progress          : {G_}{OK}/{total}{S_}",
             f"{C_}Failed so far     : {R_}{FAILED[0]}{S_}",
         ])
         draw_line()
+        log(f"[GEN] round {round_num} remaining={remaining}", "INFO")
 
         ts = []
         for i in range(tc):
@@ -895,6 +1292,7 @@ def gen_flow():
             f"{C_}Generated : {G_}{OK}/{total}{S_}",
             f"{C_}Failed    : {R_}{failed_this_round}{S_}",
         ])
+        log(f"[GEN] round {round_num} done OK={OK} failed_this_round={failed_this_round}", "INFO")
         if failed_this_round < 5:
             print_box([f"{Y_}Fewer than 5 failures — stopping.{S_}"])
             break
@@ -907,14 +1305,16 @@ def gen_flow():
     elapsed = time.time() - start_time
     print(); draw_line()
     print_box([
-        f"{G_}{B_}🔥 DONE! 🔥{S_}",
+        f"{G_}{B_}⚡ DONE! ⚡{S_}",
         f"{C_}Generated : {G_}{OK}/{total}{S_}",
         f"{C_}Failed    : {R_}{FAILED[0]}{S_}",
         f"{C_}Rounds    : {Y_}{round_num}{S_}",
         f"{C_}Time      : {Y_}{elapsed:.1f}s{S_}",
         f"{C_}Main      : {W_}{os.path.join(SAVED_FOLDER, main_file)}{S_}",
         f"{C_}Details   : {W_}{os.path.join(SAVED_FOLDER, detail_file)}{S_}",
+        f"{C_}Log File  : {W_}{LOG_FILE}{S_}",
     ])
+    log(f"[GEN] finished OK={OK}/{total} failed={FAILED[0]} elapsed={elapsed:.1f}s", "INFO")
     print(); draw_line()
     input(f"\n{C_} [↩] ENTER to return...{S_}")
 
@@ -923,16 +1323,25 @@ def gen_flow():
 # ═════════════════════════════════════════════════════════════════════════════
 def view_saved():
     banner()
-    print_box([f"{Y_}[#] 🔥 SAVED ACCOUNTS 🔥{S_}", f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}"])
-    files = [f for f in os.listdir(SAVED_FOLDER) if f.endswith(".json")] if os.path.exists(SAVED_FOLDER) else []
+    print_box([f"{Y_}[#] ⚡ SAVED FILES ⚡{S_}", f"{C_}Folder: {W_}{SAVED_FOLDER}{S_}"])
+    files = []
+    for folder, label in [(SAVED_FOLDER, "json"), (LOGS_FOLDER, "log")]:
+        if os.path.exists(folder):
+            for f in os.listdir(folder):
+                if f.endswith("." + label): files.append((label, f))
     if not files:
         print_box([f"{R_}[!] Nothing saved yet.{S_}"]); input(f"\n{C_} [↩] ENTER...{S_}"); return
     lines = [f"{Y_}{B_}📂 Files:{S_}"]
-    for f in sorted(files):
+    for label, f in sorted(files):
+        full = os.path.join(SAVED_FOLDER if label=="json" else LOGS_FOLDER, f)
         try:
-            with open(os.path.join(SAVED_FOLDER, f), 'r', encoding='utf-8') as fh:
-                cnt = len(json.load(fh))
-            lines.append(f"{C_}[↩] {f:<28} {G_}→ {cnt} accounts{S_}")
+            if label == "json":
+                with open(full, 'r', encoding='utf-8') as fh:
+                    cnt = len(json.load(fh))
+                lines.append(f"{C_}[📄] {f:<30} {G_}→ {cnt} accounts{S_}")
+            else:
+                sz = os.path.getsize(full)
+                lines.append(f"{C_}[🪵] {f:<30} {Y_}→ {sz} bytes{S_}")
         except Exception: lines.append(f"{C_}[↩] {f}{S_}")
     print_box(lines); print(); draw_line()
     input(f"\n{C_} [↩] ENTER to return...{S_}")
@@ -940,24 +1349,26 @@ def view_saved():
 def about():
     banner()
     print_box([
-        f"{Y_}{B_}📋 A R A F A T PREMIUM GEN [OB55]{S_}",
-        f"{C_}[🔥] Devs    : {W_}A R A F A T{S_}",
-        f"{C_}[🔥] Channel : {W_}@arafatcodex{S_}",
+        f"{Y_}{B_}📋 Y U T A PREMIUM GEN [OB55]{S_}",
+        f"{C_}[⚡] Devs    : {W_}YUTA{S_}",
         "",
         f"{Y_}{B_}PIPELINE:{S_}",
         f"{C_} register → grant → MajorRegister → MajorLogin{S_}",
         f"{C_} → ChooseRegion → ChooseNewbieChoice → GetLoginData{S_}",
+        f"{C_} → GetNewbieGuideDesc → GiveAccountNewbieRoles{S_}",
+        f"{C_} → GetAccountFreshStatsInfo → GetAvatarProficiencyInfos{S_}",
         f"{C_} → ClaimMaxim → SetMaxim{S_}",
+        f"{C_} → SelectPresetLoadout ×4 (128→80→96→64){S_}",
+        f"{C_} → GetProfiles verify (active + items){S_}",
         "",
-        f"{Y_}{B_}FEATURES:{S_}",
-        f"{C_} • Nickname filled to 12 chars (superscript digits){S_}",
-        f"{C_} • Auto Newbie starter pack{S_}",
-        f"{C_} • Account sealed via GetLoginData{S_}",
-        f"{C_} • Auto claim + set Maxim avatar (id 902000030){S_}",
-        f"{C_} • Retry-fill: if ≥5 fail, retry up to 3 rounds{S_}",
-        f"{C_} • Merge-on-save JSON{S_}",
+        f"{Y_}{B_}KEY POINTS:{S_}",
+        f"{C_} • 4-body sequence: 128b → 80b → 96b → 64b{S_}",
+        f"{C_} • 128b = default set, 80b = skills, 96b = character, 64b = finalize{S_}",
+        f"{C_} • active = 30 01, unlocked = 40 01{S_}",
+        f"{C_} • items = character 5506 + skills 4806, 4106{S_}",
     ])
     draw_line()
+    print_box([f"{C_}Log file: {W_}{LOG_FILE}{S_}"])
 
 def set_debug(enabled, verbose=None):
     global DEBUG, DEBUG_VERBOSE
@@ -965,14 +1376,15 @@ def set_debug(enabled, verbose=None):
     if verbose is not None: DEBUG_VERBOSE = bool(verbose)
     tag = f"{G_ if DEBUG else R_}DEBUG={'ON' if DEBUG else 'OFF'} VERBOSE={'ON' if DEBUG_VERBOSE else 'OFF'}{S_}"
     print_box([f"{C_}[dbg] {tag}"])
+    log(f"[DBG] DEBUG={DEBUG} VERBOSE={DEBUG_VERBOSE}", "INFO")
 
 def main_menu():
     while True:
         banner()
         print_box([
-            f"{Y_}{B_}[#] 🔥 MAIN MENU 🔥{S_}",
-            f"{Y_}[1]{S_} {W_}Generate Accounts (Nick+Newbie+Maxim){S_}",
-            f"{Y_}[2]{S_} {W_}View saved files{S_}",
+            f"{Y_}{B_}[#] ⚡ MAIN MENU ⚡{S_}",
+            f"{Y_}[1]{S_} {W_}Generate Accounts{S_}",
+            f"{Y_}[2]{S_} {W_}View saved files / logs{S_}",
             f"{Y_}[3]{S_} {W_}About{S_}",
             f"{Y_}[4]{S_} {W_}Toggle DEBUG  ({'ON' if DEBUG else 'OFF'}){S_}",
             f"{R_}[0]{S_} {W_}Exit{S_}",
@@ -988,9 +1400,13 @@ def main_menu():
                 elif not DEBUG_VERBOSE:     set_debug(True, verbose=True)
                 else:                       set_debug(False, verbose=False)
                 time.sleep(1)
-            elif c == "0": print(f"\n{G_}🔥 Bye!{S_}"); sys.exit(0)
+            elif c == "0":
+                log("User exit", "INFO")
+                print(f"\n{G_}⚡ Bye!{S_}"); sys.exit(0)
             else: print_box([f"{R_}[!] Invalid.{S_}"]); time.sleep(1)
-        except KeyboardInterrupt: sys.exit(0)
+        except KeyboardInterrupt:
+            log("KeyboardInterrupt in menu", "WARNING")
+            sys.exit(0)
         except Exception as e:
             dbg_exc("main_menu", e)
             print_box([f"{R_}[!] Error: {type(e).__name__}: {e}{S_}"]); time.sleep(2)
@@ -999,6 +1415,7 @@ if __name__ == "__main__":
     try:
         if install_requirements(): main_menu()
     except KeyboardInterrupt:
-        print(f"\n{G_}🔥 Goodbye!{S_}"); sys.exit(0)
+        log("KeyboardInterrupt at top-level", "WARNING")
+        print(f"\n{G_}⚡ Goodbye!{S_}"); sys.exit(0)
     except Exception as e:
         dbg_exc("__main__", e)
